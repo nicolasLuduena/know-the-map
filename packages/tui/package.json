@@ -1,0 +1,20 @@
+{
+	"name": "@bleentr/tui",
+	"version": "0.0.0",
+	"private": true,
+	"type": "module",
+	"exports": {
+		".": "./src/index.ts"
+	},
+	"scripts": {
+		"typecheck": "tsc --noEmit"
+	},
+	"dependencies": {
+		"@bleentr/api": "workspace:*",
+		"@bleentr/engine": "workspace:*",
+		"@bleentr/plugin-api": "workspace:*",
+		"@bleentr/scheduler": "workspace:*",
+		"@opentui/core": "^0.5.3",
+		"effect": "^3.22.1"
+	}
+}

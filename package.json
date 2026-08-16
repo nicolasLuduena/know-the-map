@@ -1,0 +1,20 @@
+{
+	"name": "what-the-hunk",
+	"private": true,
+	"type": "module",
+	"workspaces": [
+		"packages/*",
+		"plugins/*"
+	],
+	"scripts": {
+		"typecheck": "bun run --workspaces typecheck",
+		"lint": "biome check .",
+		"format": "biome format --write .",
+		"check": "bun run typecheck && bun run lint"
+	},
+	"devDependencies": {
+		"@biomejs/biome": "^2.5.8",
+		"effect": "^3.22.1",
+		"typescript": "^7.0.2"
+	}
+}
