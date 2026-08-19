@@ -1,378 +1,538 @@
-# What the Hunk? — Proposed Product Direction
+# What the Hunk? — Repository & Change Intelligence
 
-> **Status:** Proposal for discussion. This document authorizes no
-> implementation. The existing GitHub issues remain the active roadmap until
-> this proposal is accepted and the issues are reconciled explicitly.
-
-## The pivot
-
-What the Hunk? (WTH) should be a local code-review service with interchangeable
-clients.
-
-The `wth` binary is the product core and source of truth. It owns:
-
-- repository and workspace access;
-- Git revisions, diffs, and stable hunk identity;
-- language-server processes and semantic context;
-- AI and agent-harness integrations;
-- scheduling and cancellation;
-- caching and persisted review state;
-- annotations;
-- invariants, evidence, and impact analysis.
-
-The binary may also bundle and serve a Svelte/Monaco client locally. That is a
-later delivery target, after the core interaction and protocol have been proven
-through Neovim. It must require no account, hosted WTH backend, or source-code
-transfer through WTH infrastructure.
-
-The same service exposes a small, versioned, frontend-neutral protocol. A thin
-Neovim plugin and future VS Code, Zed, CLI, or TUI clients render the same review
-model without reimplementing repository access or analysis.
-
-```text
-                  ┌─ Neovim plugin (first)
-wth local service ┼─ bundled Svelte/Monaco client (later)
-                  ├─ future editor clients
-                  └─ diagnostic CLI or TUI
-```
-
-The durable boundary is the local service, not a particular interface.
+> **Status:** Approved product direction and source of truth for future product planning.
+> This document defines the product thesis. Existing architecture and roadmap issues
+> should be reconciled against it explicitly rather than treated as authoritative
+> where they conflict.
 
 ## Product thesis
 
-WTH is a **hunk-centered code exploration and review tool**.
+What the Hunk? (WTH) should be a **human-first repository and change intelligence system**.
 
-It is not a general-purpose AI editor. A review begins with a concrete diff and
-uses each changed hunk as the root of a small semantic and impact graph:
+The product is not primarily an AI reviewer and it is no longer centered on individual
+hunks as the top-level abstraction. Its job is to reduce the amount of system state a
+human reviewer must reconstruct mentally when reviewing large, unfamiliar, or
+agent-generated changes.
 
-```text
-changed hunk
-  ├─ enclosing symbols and types
-  ├─ definitions
-  ├─ direct callers and references
-  ├─ relevant tests and diagnostics
-  ├─ local invariants and evidence
-  └─ potentially affected code
-```
+A DeepWiki-like repository view is one surface over a persistent repository model. PR
+review consumes that model to explain a transition:
 
-The user can move through the real codebase, load analysis for the visible
-hunk, inspect how the code works, follow evidence, and return to the diff.
-Analysis is lazy: opening a repository does not send every hunk to an AI
-provider.
+> What was this system, what does this change alter, what does it become, and what
+> should a human verify before approving it?
 
-The architectural rule remains unchanged:
+The product succeeds when a reviewer can understand a change as a set of navigable
+architectural and behavioral decisions, trace claims back to code evidence, and know
+which questions remain unanswered.
 
-> Keep domain values and invariants stable; make integrations, policies, and
-> behaviors customizable.
+## Product model
 
-## Local-first experience
+WTH has three primary layers:
 
-The eventual zero-setup entry point should be:
+1. **Harness / execution** — how analysis is performed and who pays for inference.
+2. **Repository intelligence** — a persistent structural and semantic model of the codebase.
+3. **Change intelligence** — a temporal, semantic model of how a PR or stack transforms the repository.
 
-```sh
-wth review main...HEAD
-```
-
-It resolves the repository and revisions, starts or attaches to the local
-service, and creates a review workspace. `wth serve --no-open`, `wth status`,
-and `wth stop` support editor clients and explicit lifecycle control. Semantic
-and AI work begins only when requested.
-
-The later bundled Svelte/Monaco client should provide:
-
-- repository navigation with file contents loaded on demand;
-- changed-file, hunk, diff, and source views;
-- streamed explanations and follow-up questions;
-- structured invariant and impact sections;
-- evidence links that open the relevant file and range;
-- annotations and viewed state;
-- visible provider, context, permission, cache, stale, retry, and cancellation
-  states.
-
-The first browser client is a review workspace, not a replacement IDE. It may
-navigate the entire codebase, but editing, formatting, terminals, debugging,
-source-control operations, and extension compatibility are deferred.
-
-All application assets must ship with the binary. The default experience must
-not depend on a CDN, hosted font, telemetry endpoint, or WTH server.
-
-## Naming
-
-- Product: **What the Hunk?**
-- Binary and command prefix: `wth`
-- Protocol family: `wth/1`
-
-Renaming is deferred until the workflow is validated. The architecture must not
-encode the product name in domain concepts that should remain reusable.
-
-## Authority and client sessions
-
-The backend owns canonical review data:
-
-- repository root and filesystem boundary;
-- immutable base and head revisions;
-- workspace materializations;
-- normalized files and hunks;
-- language-server and analyzer lifecycles;
-- explanations, claims, findings, and impact graphs;
-- shared annotations, viewed state, and question threads;
-- cache identity and invalidation.
-
-Clients own presentation and ephemeral state: cursor, selection, focus, scroll,
-layout, temporary input, and client-specific keybindings.
-
-Unsaved documents require client-scoped workspace views:
+PR review is the interaction built on top of these layers.
 
 ```text
-Repository workspace
-  ├─ canonical Git snapshot
-  ├─ shared persisted review state
-  └─ client sessions
-       ├─ browser workspace view
-       └─ Neovim workspace view + document overlays
+                 Repository intelligence
+                 "What is this system?"
+                          │
+                          ▼
+                    Temporal model
+                "How did it get here?"
+                          │
+                          ▼
+                    Change analysis
+               "What does this alter?"
+                          │
+                          ▼
+                       Review
+                "Should I approve it?"
 ```
 
-Once submitted, the service validates and owns an overlay within that client
-session. Overlays are never global mutable state: two clients may have different
-unsaved versions of the same file. Snapshot and cache identity therefore
-include the canonical revision plus the requesting session's sorted overlay
-content hashes.
+## Harness / execution layer
 
-When relevant content changes, analysis for the old view is cancelled and its
-results become stale. No AI request restarts automatically.
+The harness is a first-class replaceable capability. WTH should not require users to
+pay WTH for every model invocation.
 
-The headless `ReviewEngine` remains stateless at its use-case boundary. The
-local service is intentionally stateful at the composition root because it owns
-scoped processes, connections, stores, and client sessions.
-
-## Frontend-neutral protocol
-
-WTH should define one versioned message schema with transport adapters:
-
-- WebSocket for the bundled browser client;
-- stdio for Neovim and command-line integrations;
-- an attachable local socket may be added later.
-
-Transports must not develop separate semantics. The protocol exposes review
-concepts, not UI widgets:
+Users should be able to reuse an existing coding-agent subscription, local model, or
+provider account through interchangeable runners such as:
 
 ```text
-workspace and document access
-diff and hunk navigation
-streamed explanation and follow-up
-invariants, impact, and evidence
-annotations and viewed state
-cancellation and shutdown
+WTH
+ ├─ OpenCode
+ ├─ Codex
+ ├─ Claude Code
+ ├─ local / self-hosted model
+ └─ direct model API
 ```
 
-It must preserve schema validation, protocol and capability versions,
-structured errors, stable stream identities, backpressure, content-addressed
-snapshots, and cancellation mapped to Effect interruption.
+This separates product economics from inference economics. A small fixed subscription
+can pay for the product experience — indexing, history, storage, review workflow,
+collaboration, and UI — while users bring the execution environment that fits their
+privacy and cost requirements.
 
-Clients receive structured values such as `InvariantClaim`, `ImpactGraph`, and
-`EvidenceLocation`; each client chooses its own rendering.
+The durable abstraction is a harness capability, not a specific provider SDK.
+Different harnesses may expose different capabilities, permissions, context limits,
+streaming semantics, or tools; WTH should normalize those differences behind a common
+review-task boundary where practical.
 
-## Repository and semantic context
+Direct API integration remains useful, but it should be an adapter rather than the
+architectural center.
 
-The service must not send the entire repository to each client or analyzer.
-File-tree operations return metadata, clients load contents and ranges on
-demand, and the context planner supplies bounded excerpts to semantic and AI
-providers. Large files, binaries, generated files, and ignored paths require
-explicit policy.
+## Repository intelligence
 
-The local service owns language-server processes so every client sees the same
-semantic model and thin clients do not normalize raw LSP responses.
+WTH maintains a structured representation of the repository. Generated prose is useful,
+but prose is not the source of truth.
 
-Servers start lazily for an approved workspace, synchronize canonical documents
-and overlays, forward cancellation, and end with their Effect scope. Conflicting
-client overlays must not share mutable LSP document state; a server may be
-reused only when the workspace view identity is identical.
+The repository model should include, as available:
 
-The frontend protocol receives normalized semantic evidence:
-
-- enclosing symbols and hover information;
-- definitions and type definitions;
-- references and call relationships;
+- modules, files, symbols, types, and public interfaces;
+- imports and dependency relationships;
+- definitions, references, callers, and callees;
+- control and data-flow relationships where they can be derived reliably;
+- entry points and important abstractions;
+- tests and the behavior they protect;
+- architectural boundaries;
 - diagnostics;
-- concise excerpts around returned locations.
+- known invariants and assumptions;
+- importance or ranking information derived from repository structure.
 
-## AI and privacy boundary
+This model should be assembled from deterministic evidence first: Git, ASTs, language
+servers, static analysis, build metadata, tests, and other analyzers. Models add semantic
+interpretation where deterministic tools cannot answer the question economically or
+reliably.
 
-Source code must never pass through WTH-operated infrastructure in the
-local-first product.
+The UI may present this model as a DeepWiki-like navigable repository:
 
-A configured remote AI provider may still receive selected context. The UI must
-show which runner is active, whether it is local or remote, which categories of
-context are selected, and which tools or permissions are available.
+```text
+Repository
+ ├─ concepts
+ ├─ modules
+ ├─ architecture
+ ├─ flows
+ ├─ important abstractions
+ ├─ invariants
+ └─ code evidence
+```
 
-Agent integrations remain replaceable `AgentRunner` capabilities. Local models
-and harnesses use the same client protocol and domain values.
+Every generated explanation should remain traceable to concrete repository evidence.
 
-## Invariants, evidence, and impact
+## The temporal repository model
 
-Important claims should be structured and navigable rather than only prose or
-an opaque confidence score.
+A conventional repository wiki answers what the repository is now. WTH must also model
+how it changes over time.
+
+Git already provides immutable repository states. WTH should derive semantic state by
+commit and preserve enough structure to compare states efficiently.
+
+```text
+commit A
+  └─ repository graph v18
+
+commit B
+  └─ delta
+       + SessionStore
+       AuthService -> SessionStore
+       - AuthService -> Database
+
+commit C
+  └─ delta
+       SessionStore.persist() semantics changed
+```
+
+The resulting knowledge model has two dimensions:
+
+```text
+                 Repository knowledge graph
+                           │
+               ┌───────────┴───────────┐
+               │                       │
+            structure                history
+               │                       │
+       symbols / calls / concepts    A -> B -> C
+```
+
+WTH does not need to regenerate an entire repository wiki for every revision. It should
+prefer content-addressed structural state plus incremental semantic deltas where
+possible.
+
+History enables questions that current-state code search cannot answer well:
+
+- Why does this abstraction exist?
+- Which PR introduced this invariant?
+- When did this module become significantly more complex?
+- Which recent abstractions still have no consumers?
+- Which architectural boundary changed most during a feature?
+- Which code still assumes the execution model that existed before this PR?
+
+## Change intelligence
+
+A PR is a semantic transition between two repository states, not merely a text diff.
+
+For a base revision and head revision, WTH should construct and compare repository
+models, then explain the meaningful delta.
+
+```text
+                  main @ A
+                     │
+                     │ PR
+                     ▼
+                  head @ B
+
+          semantic repository diff
+                     │
+       ┌─────────────┼─────────────┐
+       │             │             │
+   structure      behavior     invariants
+       │             │             │
+       └─────────────┼─────────────┘
+                     ▼
+                review lenses
+```
+
+For a change, the system should answer:
+
+### Intent
+
+What capability, behavior, or architectural decision is being introduced?
+
+### Structural impact
+
+Which modules, symbols, dependencies, interfaces, or flows were introduced, removed,
+rerouted, or reinterpreted?
+
+### Behavioral impact
+
+What previously true behavior is no longer true? What new cases exist?
+
+### Invariant impact
+
+Which assumptions were added, removed, or changed? Which values must now remain
+consistent, ordered, synchronized, idempotent, or eventually consistent?
+
+### Blast radius
+
+Which callers, consumers, tests, public boundaries, or later changes depend on this
+transition?
+
+### Review questions
+
+What does a human actually need to decide or verify before approving the change?
+
+The output should avoid shallow descriptions. For example, instead of:
+
+> `SessionStore` stores sessions.
+
+Prefer:
+
+> Session state was previously derived directly from the database. This change
+> introduces `SessionStore` as an intermediate abstraction. Persistence and invalidation
+> must now remain consistent. Review what happens if persistence succeeds but cache
+> invalidation fails.
+
+## The PR-specific wiki
+
+The primary review surface can be understood as a temporary wiki whose subject is the
+change.
+
+A PR workspace may expose:
+
+```text
+Overview
+Architecture
+Changes
+Flows
+Invariants
+Risks
+Questions
+Code
+```
+
+### Overview
+
+Intent, scope, important files, major concepts, and a map of the transition.
+
+### Architecture
+
+A semantic before/after representation of important boundaries and relationships.
+
+### Changes
+
+Concepts, abstractions, interfaces, and behaviors introduced, removed, or modified.
+
+### Flows
+
+Control or data flows affected by the change, with links to evidence.
+
+### Invariants
+
+Structured assumptions that changed or must continue to hold.
+
+### Questions
+
+Review lenses chosen specifically for the type of change.
+
+### Code
+
+The exact files, symbols, hunks, definitions, references, tests, and diagnostics that
+support each claim.
+
+Hunks remain important evidence and navigation units, but they are primitives inside the
+change model rather than the product's organizing principle.
+
+## Review strategy and model routing
+
+Different changes deserve different questions and different levels of model capability.
+The central abstraction is therefore **review-strategy routing**, not just model routing.
+
+```text
+change
+  ↓
+classification
+  ↓
+review strategy
+  ↓
+context selection
+  ↓
+model / harness selection
+  ↓
+human navigation
+```
+
+### Trivial or mechanical changes
+
+Use a fast, inexpensive model when one is needed.
+
+Questions may include:
+
+- Is behavior unchanged?
+- Were all references updated?
+- Did a public API name change?
+- Is this purely generated or formatting noise?
+
+### Business logic changes
+
+Use stronger semantic analysis.
+
+Questions may include:
+
+- Which cases changed?
+- Which old assumptions are no longer valid?
+- Are boundary, rounding, ordering, or fallback cases affected?
+- Which callers rely on the previous behavior?
+
+### Architectural changes
+
+Use repository graph, LSP/static evidence, and a stronger model.
+
+Questions may include:
+
+- Which responsibility moved?
+- Which architectural boundary changed?
+- What became asynchronous or eventually consistent?
+- Which ordering guarantees disappeared?
+- Where are retries, cancellation, idempotency, or recovery handled?
+- Which downstream code still assumes the old architecture?
+
+### Security or critical changes
+
+Use the strongest appropriate strategy and specialized passes.
+
+Questions may include:
+
+- Which trust boundaries changed?
+- What new input is attacker-controlled?
+- Which authorization or validation invariant changed?
+- Is a previously mandatory validation path bypassable?
+
+The same PR can contain regions belonging to different strategies.
+
+## Stacked PRs and feature trajectories
+
+Stacked agent-generated PRs are a first-class use case.
+
+A foundational PR often introduces types, interfaces, or abstractions whose purpose is
+visible only in later PRs. Reviewing each PR as an isolated diff forces the human to
+mentally predict the future stack.
+
+WTH should understand a stack as a **feature trajectory** while preserving the review
+boundary of each individual PR.
+
+```text
+Feature X
+
+PR #40  Foundation
+         ├─ SymbolGraph   -> used #41, #43
+         ├─ IndexContext  -> used #42
+         └─ GraphCache    -> unused in stack ⚠
+
+PR #41  Indexing
+PR #42  Analysis
+PR #43  UI integration
+```
+
+The reviewer should be able to ask:
+
+- Why is this abstraction introduced here?
+- Which later PR consumes it?
+- Does its eventual use match the abstraction being approved now?
+- Is anything introduced in the stack never used?
+- Which design decisions in PR 1 constrain PRs 2–4?
+
+This turns stacked review from isolated diff reading into review of a coherent feature
+trajectory.
+
+## Evidence, invariants, and confidence
+
+Important claims should be structured and navigable rather than hidden inside generated
+prose or represented as opaque confidence scores.
 
 ```text
 [OBSERVED] arr.length <= 10
   schema guard · src/input.ts:18
 
-[INFERRED] 0 <= a <= 10
-  from conditions at src/input.ts:18 and src/parser.ts:31-34
+[INFERRED] callers rely on synchronous completion
+  call sites · src/service.ts:40-81
 
-[UNVERIFIED] callers may pass a negative offset
+[UNVERIFIED] retry ordering may duplicate writes
   analyzer hypothesis
 ```
 
-Every claim carries a stable identity, expression, relevant variables, source
-scope, assurance level, evidence locations, and short derivation.
+Useful assurance levels include:
 
 | Level | Meaning |
 | --- | --- |
 | `proven` | Machine-checked by an identified verifier with reproducible evidence. |
-| `observed` | Directly present in source, types, diagnostics, guards, assertions, or schemas. |
+| `observed` | Directly present in code, types, diagnostics, guards, schemas, tests, or tool output. |
 | `inferred` | Derived from supporting evidence but not machine-proven. |
 | `unverified` | Analyzer hypothesis without sufficient supporting evidence. |
 
-The first language-specific path targets TypeScript. Version one must not emit
-`proven`; that label remains reserved until a real verifier exists.
+Models must not silently upgrade hypotheses into facts. Every important claim should link
+back to its evidence and indicate how it was obtained.
 
-Impact analysis is an evidence graph rooted at a changed hunk. Nodes may include
-symbols, callers, tests, diagnostics, invariants, and public boundaries. Edges
-record why nodes are related, their provider, and source locations. Model
-hypotheses remain distinguishable from LSP, syntax, Git, and test evidence.
+## Local-first privacy and security
 
-## Local service security
+WTH should remain local-first even if the eventual product includes paid hosted services.
+Source code should not need to pass through WTH-operated infrastructure for core review.
 
-Localhost is a security boundary, not a trust guarantee. The service must:
+The local service may own:
 
-- bind only to loopback by default and authenticate every client;
-- validate browser origins and never use wildcard CORS;
-- apply a restrictive Content Security Policy;
-- restrict access to explicitly opened workspace roots;
-- resolve symlinks and reject traversal or arbitrary file URIs;
-- require permission before starting tools or language servers;
-- disable telemetry by default;
-- require deliberate authentication and transport security for remote binding.
+- repository and workspace access;
+- Git revisions and semantic state;
+- AST and language-server processes;
+- local repository graph construction;
+- scheduling and cancellation;
+- caches and persisted review state;
+- harness integrations;
+- evidence and impact analysis.
 
-Review state and caches use scoped local storage with migrations and clear
-ownership. One repository service coordinates concurrent clients.
+A configured remote harness or provider may receive selected context according to the
+user's own configuration. The UI must make the active runner, remote/local boundary,
+selected context, tools, and permissions visible.
 
-## Client strategy
+Localhost is still a security boundary. Any browser-facing local service must bind to
+loopback by default, authenticate clients, validate origins, restrict filesystem roots,
+resolve symlinks safely, reject traversal, and require deliberate configuration before
+remote binding.
 
-### First client: Neovim
+## Client and UI strategy
 
-Neovim is the first validation surface. Its users already have code navigation,
-buffers, splits, and established review habits, so a small plugin can test the
-actual WTH interaction without first building another editor.
+The product model is frontend-neutral, but the most expressive product surface is likely
+a local web application because the repository/change graph requires navigation beyond a
+traditional diff.
 
-The plugin stays thin. It uses normal buffers, extmarks, virtual lines,
-highlights, location lists, splits, and floats. Git parsing, LSP processes,
-caching, prompts, and analysis remain in the service.
+The web UI should provide a DeepWiki-like exploration experience with code-aware links,
+semantic before/after views, review questions, evidence, and review state.
 
-### Later client: bundled web application
+Editor integrations such as Neovim, VS Code, or Zed can remain valuable companion
+clients. They should consume the same repository and change model rather than define a
+separate product architecture.
 
-After the protocol and interaction are stable, Svelte/Monaco becomes the
-zero-setup browser experience and the most complete client. It should consume
-the same review values instead of defining a separate application model.
+The durable boundary is therefore the repository/change intelligence service and its
+domain model, not Monaco, Neovim, a TUI, or any particular harness.
 
-### Future clients
+## Near-term MVP
 
-- VS Code should prefer native editor surfaces.
-- Zed is a target, not a promise; it depends on the extension API supporting the
-  required UI and process communication.
-- A CLI or TUI may serve diagnostics and automation, not the primary experience.
+The first implementation should validate semantic change review before attempting the
+complete long-term product.
 
-Compatibility means one shared domain and protocol with client-specific
-transports and rendering. It does not mean identical interfaces.
+1. **One repository, one PR.** Resolve a base and head commit reliably.
+2. **Persistent structural graph.** Build useful repository structure from Git plus
+   TypeScript AST/LSP evidence.
+3. **Two semantic states.** Represent the base and PR head as repository states.
+4. **Semantic delta.** Identify changed symbols, relationships, boundaries, and flows.
+5. **Change classification.** Distinguish trivial, behavioral, architectural, and
+   critical areas.
+6. **Targeted questions.** Generate review questions appropriate to each change type.
+7. **Harness routing.** Use a fast/cheap model for simple work and a stronger model for
+   complex analysis, behind an explicit harness abstraction.
+8. **DeepWiki-like review UI.** Navigate overview, architecture, changes, questions,
+   evidence, and exact code.
+9. **Traceability.** Every important generated claim links back to deterministic evidence
+   or is labeled as inference/hypothesis.
+10. **Stack awareness later.** Add multi-PR feature trajectories only after single-PR
+    semantic transitions are genuinely useful.
 
-## First vertical slice
+The MVP should optimize for learning whether this representation makes a human materially
+faster and more confident at reviewing code — not for feature completeness.
 
-Build only enough to validate the hunk-review loop:
+## Product questions to validate
 
-```text
-wth local service
-  -> resolve Git diff
-  -> expose normalized hunks over stdio
-  -> Neovim marks hunks
-  -> [h and ]h navigate
-  -> explain hunk at cursor
-  -> stream answer into a split
-  -> cancel when the buffer changes
-```
+Early usage should answer:
 
-Initial commands:
-
-- `:WthStart [base]`
-- `:WthExplain`
-- `:WthNext`
-- `:WthPrev`
-- `:WthStop`
-
-Then add, in order: evidence jumps, follow-up questions, service-owned language
-servers, invariants, impact analysis, and annotations or persisted review state.
-
-## Proposed milestones
-
-These milestones describe sequencing, not implementation authorized by this
-document.
-
-1. **Accept and reconcile the plan.** Confirm the local service and Neovim-first
-   validation strategy; then update architecture documents and issues.
-2. **Establish the minimum service boundary.** Define the `wth/1` values needed
-   for the first slice, stdio transport, stream identity, and cancellation while
-   preserving a clean path to WebSocket and client sessions.
-3. **Validate the Neovim loop.** Mark and navigate hunks, explain the hunk at the
-   cursor, stream into a split, and cancel analysis when the buffer changes.
-4. **Make explanations navigable.** Add evidence jumps, follow-up questions, and
-   service-owned language-server context.
-5. **Deepen review semantics.** Add TypeScript invariants, evidence-backed impact
-   graphs, annotations, and persisted review state.
-6. **Build the bundled browser client.** Add the Svelte/Monaco zero-setup
-   experience over WebSocket using the already validated protocol.
-7. **Consider other clients** only after the protocol and workflow are stable.
-
-## Proposed issue migration
-
-No issue is changed by this branch. If the proposal is accepted:
-
-| Issue | Proposed disposition |
-| --- | --- |
-| #1–#6 | Close after the production-foundation PR merges; create focused follow-ups for new domain, protocol, session, and overlay work. |
-| #7 | Keep as the first real OpenCode `AgentRunner` milestone. |
-| #8 | Split completed cache work from review state, annotations, and migrations. |
-| #9 | Replace first with the minimal Neovim client; track the bundled web client as a later milestone. |
-| #10 | Rewrite around binary → Neovim end-to-end first, then binary → web. |
-| #11 | Rewrite around service-owned language servers and workspace-view isolation. |
-| #12 | Keep deferred; workspace materialization and isolation remain prerequisites. |
-| #13 | Keep deferred. |
+- Does the generated decomposition match the reviewer's mental model of a familiar repo?
+- Does semantic before/after reduce time spent reconstructing architecture manually?
+- Are generated review questions useful or mostly noise?
+- Which repository facts must be deterministic rather than model-generated?
+- How much analysis can be reused across commits?
+- Does harness-based execution make cost and privacy meaningfully easier for users?
+- Does the UI remain useful on small PRs without overwhelming the reviewer?
+- Do stacked PR trajectories solve a real pain that ordinary PR tooling does not?
 
 ## Non-goals for the first product slice
 
-- A hosted WTH backend.
-- Sending repositories through WTH infrastructure.
-- A bundled browser application in the first validation slice.
-- Turning Monaco into a full replacement IDE.
-- Editing, terminals, debugging, formatters, or source-control actions in the
-  first browser client.
-- Whole-codebase chat detached from a diff.
-- Every editor or language immediately.
+- AI autonomously approving or replacing the human reviewer.
+- Sending an entire repository to a model by default.
+- Building a replacement IDE.
+- Supporting every language immediately.
+- Supporting every coding harness immediately.
+- A full historical architecture explorer before single-PR review works.
+- Treating generated prose as repository truth.
 - Presenting model confidence as proof.
-- Silent downloads, telemetry, hidden execution, or remote binding.
+- Performing expensive analysis when deterministic tooling can answer the question.
 
-## Decision record
+## Product framing
 
-This proposal chooses the local `wth` binary as the authoritative backend,
-Neovim as the first implemented client, Svelte/Monaco as a later bundled client,
-one versioned frontend-neutral protocol, backend-owned Git/LSP/analysis/state,
-client-scoped overlays, lazy loading, TypeScript-first invariants, evidence
-tiers, and local-only authenticated operation.
+WTH consists of two tightly connected capabilities:
+
+**Repository intelligence**
+
+> What is this system, and how did it get here?
+
+**Change intelligence**
+
+> What does this PR alter, and should I approve the transition?
+
+Change intelligence consumes repository intelligence. The harness abstraction cuts
+across both.
+
+The product should not optimize for AI replacing the reviewer.
+
+> **Optimize for reducing the amount of system state the reviewer must reconstruct
+> mentally.**
+
+That is the source-of-truth principle for future product and architecture decisions.
+
+## Naming
+
+- Product: **What the Hunk?**
+- Binary and command prefix: `wth`
+
+The name can be revisited later. Architecture and domain concepts should not depend on it.
 
 ## References
 
 - [Current architecture](./what-the-hunk-architecture.md)
 - [Current condensed overview and MVP](./what-the-hunk-overview.md)
-- [Monaco Editor](https://github.com/microsoft/monaco-editor)
-- [Neovim API](https://neovim.io/doc/user/api)
-- [Visual Studio Code Extension API](https://code.visualstudio.com/api/)
-- [Zed extensions](https://zed.dev/docs/extensions)
