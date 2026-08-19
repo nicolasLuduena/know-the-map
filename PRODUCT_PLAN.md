@@ -1,156 +1,208 @@
-# What the Hunk? — Proposed Product Direction
+# Diff Buddy — Proposed Product Direction
 
-> **Status:** Proposal for discussion. This document changes no implementation
-> commitment by itself. The existing GitHub issues remain the active roadmap
-> until this proposal is accepted and the issues are reconciled explicitly.
+> **Status:** Proposal for discussion. This document authorizes no
+> implementation. The existing GitHub issues remain the active roadmap until
+> this proposal is accepted and the issues are reconciled explicitly.
 
 ## The pivot
 
-What the Hunk? should remain a headless, stateless diff-analysis engine, but a
-standalone terminal UI should no longer define the primary product experience.
+Diff Buddy should be a local code-review service with interchangeable clients.
 
-The useful workflow already happens inside an editor:
+The `diff-buddy` binary is the product core and source of truth. It owns:
+
+- repository and workspace access;
+- Git revisions, diffs, and stable hunk identity;
+- language-server processes and semantic context;
+- AI and agent-harness integrations;
+- scheduling and cancellation;
+- caching and persisted review state;
+- annotations;
+- invariants, evidence, and impact analysis.
+
+The binary also bundles and serves a Svelte/Monaco reference client locally.
+Running Diff Buddy should open a complete browser-based review workspace without
+requiring an account, hosted Diff Buddy backend, or source-code transfer through
+Diff Buddy infrastructure.
+
+The same service exposes a small, versioned, frontend-neutral protocol. A thin
+Neovim plugin and future VS Code, Zed, CLI, or TUI clients render the same review
+model without reimplementing repository access or analysis.
 
 ```text
-move through real code
-  → land on a changed region
-  → ask what changed and why
-  → follow definitions, callers, tests, and diagnostics
-  → inspect claims about program state
-  → return to the hunk
+                         ┌─ bundled Svelte/Monaco client
+                         ├─ Neovim plugin
+diff-buddy local service ┼─ future editor clients
+                         └─ diagnostic CLI or TUI
 ```
 
-Recreating buffers, code navigation, syntax awareness, search, references, and
-language-server interaction inside a TUI would turn WTH into a partial editor.
-The proposed first client is therefore a Neovim plugin. The engine stays
-client-independent so VS Code, a web client, or a small diagnostic CLI can be
-added later without changing the domain or analysis model.
+The durable boundary is the local service, not a particular interface.
 
 ## Product thesis
 
-WTH is a **hunk-centered code exploration tool**.
+Diff Buddy is a **hunk-centered code exploration and review tool**.
 
 It is not a general-purpose AI editor. A review begins with a concrete diff and
-uses the changed hunk as the root of a small semantic graph:
+uses each changed hunk as the root of a small semantic and impact graph:
 
 ```text
 changed hunk
-  ├─ enclosing symbol and types
+  ├─ enclosing symbols and types
   ├─ definitions
   ├─ direct callers and references
-  ├─ relevant tests
-  ├─ diagnostics
-  └─ evidence about local invariants
+  ├─ relevant tests and diagnostics
+  ├─ local invariants and evidence
+  └─ potentially affected code
 ```
 
-The user should be able to move through that graph using normal editor
-navigation, request analysis at the cursor, and jump from every important claim
-to supporting code.
+The user can move through the real codebase, load analysis for the visible
+hunk, inspect how the code works, follow evidence, and return to the diff.
+Analysis is lazy: opening a repository does not send every hunk to an AI
+provider.
 
 The architectural rule remains unchanged:
 
 > Keep domain values and invariants stable; make integrations, policies, and
 > behaviors customizable.
 
-## Proposed user experience
+## Local-first experience
 
-The first product client should support this loop:
+The default entry point should be:
 
-1. Start a review for a base and head revision.
-2. Show changed hunks in ordinary Neovim buffers using signs or extmarks.
-3. Move to the next or previous hunk across files.
-4. Explain the hunk at the cursor in a native split or temporary preview.
-5. Stream the explanation without blocking editor navigation.
-6. Inspect definitions, callers, tests, diagnostics, and invariant evidence.
-7. Jump directly from a claim to its source evidence.
-8. Ask a follow-up question using the current hunk and prior conversation.
-9. Cancel obsolete work when the user edits the buffer or navigates away.
-
-The plugin should use native Neovim surfaces: buffers, splits, floats, location
-lists, `vim.ui.input`, LSP clients, and Tree-sitter. It should not embed a second
-editor or introduce a permanent chat dashboard.
-
-Default mappings, if enabled, should be buffer-local and active only during a
-WTH review. Every mapping must be configurable or removable.
-
-## Proposed client boundary
-
-Neovim cannot consume the in-process TypeScript API directly. The proposed
-client boundary is a local WTH daemon using versioned JSON-RPC over stdio:
-
-```text
-Neovim plugin (Lua)
-  ├─ buffers and navigation
-  ├─ live document contents
-  ├─ attached LSP results
-  └─ rendering and interaction
-
-           JSON-RPC / stdio
-
-WTH daemon (TypeScript + Effect)
-  ├─ ReviewApi
-  ├─ engine and scheduler
-  ├─ plugin registry
-  ├─ Git diff source
-  ├─ analyzers and agent runners
-  └─ cache and persistence capabilities
+```sh
+diff-buddy main...HEAD
 ```
 
-One daemon should be scoped to one editor workspace and exit when its stdio
-connection closes. Effect interruption remains the authoritative cancellation
-mechanism.
+It resolves the repository and revisions, starts or attaches to the local
+service, creates a review workspace, and opens an authenticated loopback URL.
+The initial screen loads the file tree, normalized diff, and review state;
+semantic and AI work begins only when requested.
 
-The plugin should require an explicit `wth` executable on `PATH`, or a configured
-command. WTH must not silently download or execute binaries, language servers,
-or models.
+The bundled Svelte/Monaco client is the reference implementation and zero-setup
+experience. It should provide:
 
-## Live editor state
+- repository navigation with file contents loaded on demand;
+- changed-file, hunk, diff, and source views;
+- streamed explanations and follow-up questions;
+- structured invariant and impact sections;
+- evidence links that open the relevant file and range;
+- annotations and viewed state;
+- visible provider, context, permission, cache, stale, retry, and cancellation
+  states.
 
-The visible buffer is the source of truth for the editor experience, including
-unsaved changes.
+The first browser client is a review workspace, not a replacement IDE. It may
+navigate the entire codebase, but editing, formatting, terminals, debugging,
+source-control operations, and extension compatibility are deferred.
 
-For each request, Neovim should provide the content and version of every loaded,
-modified buffer inside the repository. WTH should derive an ephemeral,
-content-addressed workspace identity from the reviewed Git revision and sorted
-overlay content hashes.
+All application assets must ship with the binary. The default experience must
+not depend on a CDN, hosted font, telemetry endpoint, or Diff Buddy server.
 
-Consequences:
+## Authority and client sessions
 
-- Unsaved code can be analyzed without forcing a save.
-- Results become stale immediately after a relevant buffer changes.
-- Active analysis is cancelled when its input changes.
-- No model request restarts automatically; the user explicitly asks again.
-- Cache entries for different overlay contents cannot collide.
-- Files outside the workspace root are rejected unless a future permission
-  policy explicitly allows them.
+The backend owns canonical review data:
 
-## Semantic context
+- repository root and filesystem boundary;
+- immutable base and head revisions;
+- workspace materializations;
+- normalized files and hunks;
+- language-server and analyzer lifecycles;
+- explanations, claims, findings, and impact graphs;
+- shared annotations, viewed state, and question threads;
+- cache identity and invalidation.
 
-The first client should reuse Neovim's attached language-server clients rather
-than starting a duplicate server inside WTH.
+Clients own presentation and ephemeral state: cursor, selection, focus, scroll,
+layout, temporary input, and client-specific keybindings.
 
-Neovim should normalize supported LSP results into validated context fragments:
+Unsaved documents require client-scoped workspace views:
 
-- enclosing symbol and hover information;
+```text
+Repository workspace
+  ├─ canonical Git snapshot
+  ├─ shared persisted review state
+  └─ client sessions
+       ├─ browser workspace view
+       └─ Neovim workspace view + document overlays
+```
+
+Once submitted, the service validates and owns an overlay within that client
+session. Overlays are never global mutable state: two clients may have different
+unsaved versions of the same file. Snapshot and cache identity therefore
+include the canonical revision plus the requesting session's sorted overlay
+content hashes.
+
+When relevant content changes, analysis for the old view is cancelled and its
+results become stale. No AI request restarts automatically.
+
+The headless `ReviewEngine` remains stateless at its use-case boundary. The
+local service is intentionally stateful at the composition root because it owns
+scoped processes, connections, stores, and client sessions.
+
+## Frontend-neutral protocol
+
+Diff Buddy should define one versioned message schema with transport adapters:
+
+- WebSocket for the bundled browser client;
+- stdio for Neovim and command-line integrations;
+- an attachable local socket may be added later.
+
+Transports must not develop separate semantics. The protocol exposes review
+concepts, not UI widgets:
+
+```text
+workspace and document access
+diff and hunk navigation
+streamed explanation and follow-up
+invariants, impact, and evidence
+annotations and viewed state
+cancellation and shutdown
+```
+
+It must preserve schema validation, protocol and capability versions,
+structured errors, stable stream identities, backpressure, content-addressed
+snapshots, and cancellation mapped to Effect interruption.
+
+Clients receive structured values such as `InvariantClaim`, `ImpactGraph`, and
+`EvidenceLocation`; each client chooses its own rendering.
+
+## Repository and semantic context
+
+The service must not send the entire repository to each client or analyzer.
+File-tree operations return metadata, clients load contents and ranges on
+demand, and the context planner supplies bounded excerpts to semantic and AI
+providers. Large files, binaries, generated files, and ignored paths require
+explicit policy.
+
+The local service owns language-server processes so every client sees the same
+semantic model and thin clients do not normalize raw LSP responses.
+
+Servers start lazily for an approved workspace, synchronize canonical documents
+and overlays, forward cancellation, and end with their Effect scope. Conflicting
+client overlays must not share mutable LSP document state; a server may be
+reused only when the workspace view identity is identical.
+
+The frontend protocol receives normalized semantic evidence:
+
+- enclosing symbols and hover information;
 - definitions and type definitions;
-- references;
-- incoming and outgoing calls when supported;
+- references and call relationships;
 - diagnostics;
 - concise excerpts around returned locations.
 
-The engine remains responsible for validation, deduplication, ordering, and
-budgets. Editor-provided context is untrusted input at the API boundary.
+## AI and privacy boundary
 
-Daemon-managed language servers remain a valid future capability for headless,
-web, and remote clients. They are not required for the Neovim-first validation
-slice.
+Source code must never pass through Diff Buddy-operated infrastructure in the
+local-first product.
 
-## Invariants and evidence
+A configured remote AI provider may still receive selected context. The UI must
+show which runner is active, whether it is local or remote, which categories of
+context are selected, and which tools or permissions are available.
 
-WTH should represent important claims as structured, navigable data rather than
-only prose or an opaque confidence score.
+Agent integrations remain replaceable `AgentRunner` capabilities. Local models
+and harnesses use the same client protocol and domain values.
 
-Example:
+## Invariants, evidence, and impact
+
+Important claims should be structured and navigable rather than only prose or
+an opaque confidence score.
 
 ```text
 [OBSERVED] arr.length <= 10
@@ -163,17 +215,8 @@ Example:
   analyzer hypothesis
 ```
 
-Every invariant claim should carry:
-
-- a stable identity;
-- the expression being claimed;
-- the relevant variables;
-- its source scope;
-- an assurance level;
-- one or more evidence locations;
-- a short explanation of how the evidence supports the claim.
-
-The assurance levels have strict meanings:
+Every claim carries a stable identity, expression, relevant variables, source
+scope, assurance level, evidence locations, and short derivation.
 
 | Level | Meaning |
 | --- | --- |
@@ -182,102 +225,109 @@ The assurance levels have strict meanings:
 | `inferred` | Derived from supporting evidence but not machine-proven. |
 | `unverified` | Analyzer hypothesis without sufficient supporting evidence. |
 
-The first language-specific path should target TypeScript. It may extract
-comparisons and conjunctions from guards, loop conditions, assertions, type
-predicates, assignments, and validation schemas. Version one must not emit
+The first language-specific path targets TypeScript. Version one must not emit
 `proven`; that label remains reserved until a real verifier exists.
+
+Impact analysis is an evidence graph rooted at a changed hunk. Nodes may include
+symbols, callers, tests, diagnostics, invariants, and public boundaries. Edges
+record why nodes are related, their provider, and source locations. Model
+hypotheses remain distinguishable from LSP, syntax, Git, and test evidence.
+
+## Local service security
+
+Localhost is a security boundary, not a trust guarantee. The service must:
+
+- bind only to loopback by default and authenticate every client;
+- validate browser origins and never use wildcard CORS;
+- apply a restrictive Content Security Policy;
+- restrict access to explicitly opened workspace roots;
+- resolve symlinks and reject traversal or arbitrary file URIs;
+- require permission before starting tools or language servers;
+- disable telemetry by default;
+- require deliberate authentication and transport security for remote binding.
+
+Review state and caches use scoped local storage with migrations and clear
+ownership. One repository service coordinates concurrent clients.
+
+## Client strategy
+
+### Reference client: bundled web application
+
+The Svelte/Monaco application defines the complete supported workflow and
+validates the frontend-neutral protocol.
+
+### First external client: Neovim
+
+The Neovim plugin stays thin. It uses normal buffers, extmarks, virtual lines,
+highlights, location lists, splits, and floats. It submits overlays and renders
+the same review values as the web client. Git parsing, LSP processes, caching,
+prompts, and analysis remain in the service.
+
+### Future clients
+
+- VS Code should prefer native editor surfaces.
+- Zed depends on its extension API supporting the required UI and process
+  communication.
+- A CLI or TUI may serve diagnostics and automation, not the primary experience.
 
 ## Proposed milestones
 
-These milestones describe sequencing, not work authorized by this document.
+These milestones describe sequencing, not implementation authorized by this
+document.
 
-### 0. Accept and reconcile the plan
-
-- Review this proposal.
-- Decide whether Neovim replaces the TUI as the MVP client.
-- Update the architecture and condensed overview only after acceptance.
-- Reconcile GitHub issues explicitly rather than leaving two roadmaps.
-
-### 1. Establish the editor-neutral boundary
-
-- Define versioned transport schemas.
-- Add a scoped local daemon over JSON-RPC/stdio.
-- Preserve streaming, structured errors, and Effect cancellation.
-- Add live document overlays to snapshot and cache identity.
-
-### 2. Validate the Neovim workflow
-
-- Mark and navigate hunks in normal buffers.
-- Explain and preview the hunk at the cursor.
-- Stream results into native Neovim surfaces.
-- Support evidence jumps and follow-up questions.
-- Cancel and mark results stale when input changes.
-
-### 3. Add semantic evidence
-
-- Reuse attached Neovim LSP clients.
-- Normalize semantic results into bounded context fragments.
-- Add TypeScript syntax evidence and structured invariant claims.
-- Keep assurance levels visible and enforce their semantics at schema boundaries.
-
-### 4. Consider additional clients
-
-Only after the editor workflow is validated:
-
-- evaluate a VS Code extension using native editor surfaces;
-- evaluate a web client when workspace hosting and isolation are justified;
-- optionally add a minimal diagnostic CLI or TUI for engine debugging.
+1. **Accept and reconcile the plan.** Confirm the local service and bundled web
+   client; then update architecture documents and issues.
+2. **Establish the service boundary.** Define protocol schemas, client sessions,
+   WebSocket and stdio transports, overlays, cancellation, and security.
+3. **Validate the bundled workspace.** Navigate files and diffs, stream hunk
+   analysis, and persist annotations and viewed state.
+4. **Add semantic evidence.** Manage language servers and add TypeScript
+   invariants and evidence-backed impact graphs.
+5. **Validate Neovim.** Build the thin client and synchronize overlays without
+   moving analysis logic into Lua.
+6. **Consider other clients** only after the protocol and reference workflow are
+   stable.
 
 ## Proposed issue migration
 
-No GitHub issue is changed by this branch. If the proposal is accepted, use the
-following migration:
+No issue is changed by this branch. If the proposal is accepted:
 
-| Issue | Proposed disposition after acceptance |
+| Issue | Proposed disposition |
 | --- | --- |
-| #1 — monorepo skeleton | Close after the production-foundation PR merges. |
-| #2 — domain schemas | Close after the foundation merges; track source locations and invariant claims separately. |
-| #3 — capability contracts | Close after the foundation merges; track editor context and transport schemas separately. |
-| #4 — ReviewApi and engine | Close after the foundation merges; create a follow-up for overlays and the daemon boundary. |
-| #5 — scheduler | Close after the foundation merges; retain advanced policies under #13. |
-| #6 — Git diff source | Close after the foundation merges; create a focused overlay-diff follow-up. |
-| #7 — OpenCode V2 runner | Keep as the first real `AgentRunner` milestone. |
-| #8 — SQLite | Split completed cache work from the deferred `ReviewStore`. |
-| #9 — OpenTUI client | Replace with the Neovim client and daemon vertical slice. |
-| #10 — end-to-end slice | Rewrite around Neovim → daemon → engine, including overlays, streaming, and cancellation. |
-| #11 — LSP ecosystem | Split editor-supplied intelligence from future daemon-managed language servers. |
-| #12 — GitHub diff source | Keep deferred; workspace materialization and isolation remain prerequisites. |
-| #13 — post-MVP review and scheduler | Keep deferred. |
+| #1–#6 | Close after the production-foundation PR merges; create focused follow-ups for new domain, protocol, session, and overlay work. |
+| #7 | Keep as the first real OpenCode `AgentRunner` milestone. |
+| #8 | Split completed cache work from review state, annotations, and migrations. |
+| #9 | Replace with bundled Svelte/Monaco and thin Neovim client milestones. |
+| #10 | Rewrite around binary → web and binary → Neovim end-to-end flows. |
+| #11 | Rewrite around service-owned language servers and workspace-view isolation. |
+| #12 | Keep deferred; workspace materialization and isolation remain prerequisites. |
+| #13 | Keep deferred. |
 
 ## Non-goals for the first product slice
 
-- A standalone TUI as the primary experience.
-- A full browser IDE or hosted repository service.
-- Arbitrary whole-codebase chat detached from a diff.
-- Supporting every editor or language immediately.
-- Starting a second language server when the editor already has one.
+- A hosted Diff Buddy backend.
+- Sending repositories through Diff Buddy infrastructure.
+- Turning Monaco into a full replacement IDE.
+- Editing, terminals, debugging, formatters, or source-control actions in the
+  first browser client.
+- Whole-codebase chat detached from a diff.
+- Every editor or language immediately.
 - Presenting model confidence as proof.
-- Silent dependency downloads or hidden process execution.
+- Silent downloads, telemetry, hidden execution, or remote binding.
 
 ## Decision record
 
-The current proposal chooses:
-
-- Neovim as the first product client.
-- Hunk-centered semantic navigation rather than unrestricted exploration.
-- A local editor-neutral daemon boundary.
-- Live unsaved-buffer overlays.
-- Neovim-provided LSP intelligence first.
-- TypeScript as the first invariant-extraction target.
-- Evidence tiers instead of undifferentiated confidence.
-- Buffer-local, configurable mappings.
-- An explicit `wth` executable with no silent installation.
-- Removal of the standalone TUI from the proposed MVP, while preserving the
-  transport-independent API that allows future clients.
+This proposal chooses the local `diff-buddy` binary as the authoritative
+backend, Svelte/Monaco as the bundled reference client, Neovim as the first thin
+external client, one versioned protocol over WebSocket and stdio, backend-owned
+Git/LSP/analysis/state, client-scoped overlays, lazy loading, TypeScript-first
+invariants, evidence tiers, and local-only authenticated operation.
 
 ## References
 
 - [Current architecture](./what-the-hunk-architecture.md)
 - [Current condensed overview and MVP](./what-the-hunk-overview.md)
+- [Monaco Editor](https://github.com/microsoft/monaco-editor)
 - [Neovim API](https://neovim.io/doc/user/api)
 - [Visual Studio Code Extension API](https://code.visualstudio.com/api/)
+- [Zed extensions](https://zed.dev/docs/extensions)
