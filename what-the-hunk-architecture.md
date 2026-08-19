@@ -264,7 +264,7 @@ For a hunk that changes `parseTransaction()`, the context pipeline can:
 3. Find direct callers and other references.
 4. Find tests, implementations, and relevant type definitions.
 5. Load small excerpts around the returned locations.
-6. Rank and deduplicate those excerpts.
+6. Deduplicate and order those excerpts by value, most valuable first.
 7. Give the analyzer only the highest-value fragments.
 
 Useful LSP operations include:
@@ -306,10 +306,10 @@ type ContextFragment = {
   symbol?: SymbolInfo
   excerpt: string
   reason: string
-  relevance: number
-  estimatedTokens: number
 }
 ```
+
+Providers emit fragments in descending order of value: stream order is the ranking. The planner consumes the stream and truncates at its own budget — fragments never carry scores or token estimates.
 
 The UI can expose provenance without understanding each provider:
 
@@ -323,11 +323,10 @@ Context used:
 
 ### Context budgets
 
-References may produce hundreds of locations, so the planner needs a configurable budget and ranking policy.
+References may produce hundreds of locations, so the planner enforces its own budget: it consumes each provider's stream, in order, and stops once the budget is exhausted. `ContextPolicy` only controls how a provider collects — collection cost, not the planner's budget.
 
 ```ts
 type ContextPolicy = {
-  maxTokens: number
   maxReferencesPerSymbol: number
   includeTests: boolean
   includeIncomingCalls: boolean

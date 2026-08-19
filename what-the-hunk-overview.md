@@ -91,10 +91,11 @@ Hunk → Context planner → LSP · AST · Search · Git → ranked bundle → a
 
 - `CodeIntelligence` — symbol/references/calls/definitions/hover/diagnostics
 - `ContextProvider` — returns neutral `ContextFragment` values (source, uri,
-  range, symbol, excerpt, reason, relevance, tokens) so the UI can show
-  provenance without understanding providers
-- `ContextPolicy` — configurable token budget, max references per symbol,
-  include tests/incoming/outgoing calls, traversal depth
+  range, symbol, excerpt, reason), emitted in descending value order so the
+  UI can show provenance without understanding providers
+- `ContextPolicy` — max references per symbol, include
+  tests/incoming/outgoing calls, traversal depth; the planner enforces its
+  own token budget by truncating provider streams
 - LSP references return locations, not code — WTH parses the actual call
   expression and sends concise call-site excerpts
 

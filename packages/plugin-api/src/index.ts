@@ -57,14 +57,11 @@ export const ContextFragmentSchema = Schema.Struct({
 	symbol: Schema.OptionFromUndefinedOr(SymbolInfoSchema),
 	excerpt: Schema.String,
 	reason: Schema.String,
-	relevance: Schema.Number,
-	estimatedTokens: Schema.Number,
 });
 export type ContextFragment = Schema.Schema.Type<typeof ContextFragmentSchema>;
 
 /** Limits and options for collecting context about a hunk. */
 export const ContextPolicySchema = Schema.Struct({
-	maxTokens: Schema.Number,
 	maxReferencesPerSymbol: Schema.Number,
 	includeTests: Schema.Boolean,
 	includeIncomingCalls: Schema.Boolean,
@@ -163,7 +160,9 @@ export interface ContextRequest {
 	readonly policy: ContextPolicy;
 }
 
-/** Provides extra context about a hunk (e.g. LSP). */
+/** Provides extra context about a hunk (e.g. LSP). Emits fragments in
+ * descending order of value: stream order is the ranking, and the consumer
+ * truncates at its budget. */
 export interface ContextProvider {
 	readonly id: string;
 	readonly collect: (
