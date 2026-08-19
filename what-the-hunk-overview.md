@@ -56,7 +56,7 @@ behind `CacheStore`/`ReviewStore`; a client can use SQLite or be fully ephemeral
 
 ```ts
 resolveDiff(input)            → Effect<DiffSnapshot, DiffError>
-explainHunk(input)            → Effect<HunkExplanation, AnalysisError>
+explainHunk(input)            → Stream<ExplanationEvent, AnalysisError>
 askAboutHunk(input)           → Stream<AnswerEvent, AnalysisError>
 reviewDiff(input)             → Stream<ReviewEvent, ReviewError>
 ```
@@ -76,9 +76,9 @@ handling, token/cost budgets, and cache lookup before acquiring an agent permit.
 ## Agent runners
 
 `AgentRunner` is the boundary — OpenCode is an adapter, not domain. The first
-implementation is `OpenCodeV2Runner` over the V2 client/server boundary (the
-Effect-native embedded SDK is not yet published). When it stabilizes, only this
-adapter changes.
+planned implementation is `OpenCodeV2Runner` over a structured client/server
+boundary. The current foundation deliberately registers no OpenCode runner;
+when the adapter lands, only that capability implementation changes.
 
 ## Semantic context and LSP
 

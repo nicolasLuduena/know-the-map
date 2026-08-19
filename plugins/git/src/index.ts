@@ -8,196 +8,253 @@ import type {
 import {
 	decodeDiffSnapshot,
 	deriveHunkId,
+	deriveSnapshotId,
 	makeRepoPath,
 	makeRevision,
-	makeSnapshotId,
 } from "@bleentr/domain";
-import type { ContextProvider, DiffSource } from "@bleentr/plugin-api";
+import type { DiffSource } from "@bleentr/plugin-api";
 import { DiffError, definePlugin } from "@bleentr/plugin-api";
-import { Effect, Stream } from "effect";
+import { Effect } from "effect";
 
-// -- Git execution ------------------------------------------------------------
+const capabilityId = "wth.git";
 
 const runGit = (
 	args: ReadonlyArray<string>,
 	cwd: string,
 ): Effect.Effect<string, DiffError> =>
-	Effect.tryPromise({
-		try: async () => {
-			const proc = Bun.spawn(["git", ...args], {
+	Effect.async<string, DiffError>((resume) => {
+		let proc: Bun.Subprocess<"ignore", "pipe", "pipe">;
+		try {
+			proc = Bun.spawn(["git", ...args], {
 				cwd,
 				stdout: "pipe",
 				stderr: "pipe",
 			});
-			const code = await proc.exited;
-			const stdout = await new Response(proc.stdout).text();
-			if (code !== 0) {
-				const stderr = await new Response(proc.stderr).text();
-				throw new Error(stderr.trim() || `git exited with code ${code}`);
-			}
-			return stdout;
-		},
-		catch: (error) =>
-			new DiffError({
-				message: `git diff failed: ${
-					error instanceof Error ? error.message : String(error)
-				}`,
-			}),
+		} catch (error) {
+			resume(
+				Effect.fail(
+					new DiffError({
+						capabilityId,
+						message: `failed to start git: ${String(error)}`,
+					}),
+				),
+			);
+			return Effect.void;
+		}
+		const stdout = new Response(proc.stdout).text();
+		const stderr = new Response(proc.stderr).text();
+		void Promise.all([proc.exited, stdout, stderr]).then(
+			([code, output, errorOutput]) => {
+				if (code === 0) resume(Effect.succeed(output));
+				else
+					resume(
+						Effect.fail(
+							new DiffError({
+								capabilityId,
+								message: errorOutput.trim() || `git exited with code ${code}`,
+							}),
+						),
+					);
+			},
+			(error) =>
+				resume(
+					Effect.fail(new DiffError({ capabilityId, message: String(error) })),
+				),
+		);
+		return Effect.sync(() => proc.kill());
 	});
 
-// -- Unified diff parsing -------------------------------------------------------
+const HUNK_HEADER = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/;
 
-const HUNK_HEADER = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))?(?: @@)?/;
-
-interface HunkAccumulator {
-	readonly oldStart: number;
-	readonly oldCount: number;
-	readonly newStart: number;
-	readonly newCount: number;
-	readonly lines: Array<DiffLine>;
+interface FileMetadata {
+	readonly path: string;
+	readonly previousPath?: string;
+	readonly status: FileDiff["status"];
 }
 
-const makeRange = (start: number, count: number): LineRange => {
-	if (count === 0) return { start: 0, end: 0 };
-	return { start, end: start + count - 1 };
-};
-
-const makeHunk = (accumulator: HunkAccumulator, path: string): Hunk => {
-	const oldRange = makeRange(accumulator.oldStart, accumulator.oldCount);
-	const newRange = makeRange(accumulator.newStart, accumulator.newCount);
-	const lines: ReadonlyArray<DiffLine> = accumulator.lines;
-	return {
-		id: deriveHunkId({ path, oldRange, newRange, lines }),
-		oldRange,
-		newRange,
-		lines,
-	};
-};
-
-const parseDiff = (
-	output: string,
-	base: string,
-	head: string,
-): DiffSnapshot => {
-	const files: Array<FileDiff> = [];
-	for (const raw of output.split("diff --git ")) {
-		if (raw.trim() === "") continue;
-		const lines = raw.replace(/\n$/, "").split("\n");
-		const header = lines[0] ?? "";
-		const bPath = header.indexOf(" b/");
-		const path = bPath >= 0 ? header.slice(bPath + " b/".length) : header;
-
-		let status: FileDiff["status"] = "modified";
-		for (const line of lines) {
-			if (line.startsWith("new file mode")) {
-				status = "added";
-				break;
-			}
-			if (line.startsWith("deleted file mode")) {
-				status = "deleted";
-				break;
-			}
+const parseRawMetadata = (output: string): ReadonlyArray<FileMetadata> => {
+	const tokens = output.split("\0");
+	const files: Array<FileMetadata> = [];
+	let index = 0;
+	while (index < tokens.length) {
+		const header = tokens[index++];
+		if (!header) continue;
+		const statusToken = header.trim().split(/\s+/).at(-1) ?? "M";
+		const statusCode = statusToken[0] ?? "M";
+		const firstPath = tokens[index++] ?? "";
+		if (statusCode === "R" || statusCode === "C") {
+			const path = tokens[index++] ?? "";
+			files.push({
+				path,
+				previousPath: firstPath,
+				status: statusCode === "R" ? "renamed" : "copied",
+			});
+			continue;
 		}
-
-		const hunks: Array<Hunk> = [];
-		let current: HunkAccumulator | null = null;
-		let oldLine = 0;
-		let newLine = 0;
-		for (const line of lines.slice(1)) {
-			if (line.startsWith("\\")) continue;
-			const match = HUNK_HEADER.exec(line);
-			if (match !== null) {
-				const oldStart = Number(match[1]);
-				const oldCount = match[2] !== undefined ? Number(match[2]) : 1;
-				const newStart = Number(match[3]);
-				const newCount = match[4] !== undefined ? Number(match[4]) : 1;
-				if (current !== null) hunks.push(makeHunk(current, path));
-				current = { oldStart, oldCount, newStart, newCount, lines: [] };
-				oldLine = oldStart;
-				newLine = newStart;
-				continue;
-			}
-			if (current === null) continue;
-			if (line.startsWith("+")) {
-				current.lines.push({
-					kind: "addition",
-					newLineNumber: newLine,
-					content: line.slice(1),
-				});
-				newLine += 1;
-			} else if (line.startsWith("-")) {
-				current.lines.push({
-					kind: "deletion",
-					oldLineNumber: oldLine,
-					content: line.slice(1),
-				});
-				oldLine += 1;
-			} else if (line.startsWith(" ")) {
-				current.lines.push({
-					kind: "context",
-					oldLineNumber: oldLine,
-					newLineNumber: newLine,
-					content: line.slice(1),
-				});
-				oldLine += 1;
-				newLine += 1;
-			}
-		}
-		if (current !== null) hunks.push(makeHunk(current, path));
-		if (hunks.length === 0) continue;
-		files.push({ path: makeRepoPath(path), status, hunks });
+		const status: FileDiff["status"] =
+			statusCode === "A"
+				? "added"
+				: statusCode === "D"
+					? "deleted"
+					: "modified";
+		files.push({ path: firstPath, status });
 	}
-	return {
-		id: makeSnapshotId(base, head),
-		base: makeRevision(base),
-		head: makeRevision(head),
-		files,
-	};
+	return files;
 };
 
-// -- DiffSource capability -------------------------------------------------------
+const makeRange = (start: number, count: number): LineRange =>
+	count === 0 ? { start: 0, end: 0 } : { start, end: start + count - 1 };
+
+const parseHunks = (section: string, path: string): ReadonlyArray<Hunk> => {
+	const hunks: Array<Hunk> = [];
+	let oldStart = 0;
+	let oldCount = 0;
+	let newStart = 0;
+	let newCount = 0;
+	let oldLine = 0;
+	let newLine = 0;
+	let lines: Array<DiffLine> | undefined;
+
+	const finish = () => {
+		if (lines === undefined) return;
+		const consumedOld = lines.filter((line) => line.kind !== "addition").length;
+		const consumedNew = lines.filter((line) => line.kind !== "deletion").length;
+		if (consumedOld !== oldCount || consumedNew !== newCount) {
+			throw new Error(`hunk line counts do not match header for ${path}`);
+		}
+		const oldRange = makeRange(oldStart, oldCount);
+		const newRange = makeRange(newStart, newCount);
+		hunks.push({
+			id: deriveHunkId({ path, oldRange, newRange, lines }),
+			oldRange,
+			newRange,
+			lines,
+		});
+	};
+
+	for (const line of section.split("\n")) {
+		const header = HUNK_HEADER.exec(line);
+		if (header !== null) {
+			finish();
+			oldStart = Number(header[1]);
+			oldCount = header[2] === undefined ? 1 : Number(header[2]);
+			newStart = Number(header[3]);
+			newCount = header[4] === undefined ? 1 : Number(header[4]);
+			oldLine = oldStart;
+			newLine = newStart;
+			lines = [];
+			continue;
+		}
+		if (lines === undefined || line.startsWith("\\")) continue;
+		if (line.startsWith("+")) {
+			lines.push({
+				kind: "addition",
+				newLineNumber: newLine,
+				content: line.slice(1),
+			});
+			newLine += 1;
+		} else if (line.startsWith("-")) {
+			lines.push({
+				kind: "deletion",
+				oldLineNumber: oldLine,
+				content: line.slice(1),
+			});
+			oldLine += 1;
+		} else if (line.startsWith(" ")) {
+			lines.push({
+				kind: "context",
+				oldLineNumber: oldLine,
+				newLineNumber: newLine,
+				content: line.slice(1),
+			});
+			oldLine += 1;
+			newLine += 1;
+		}
+	}
+	finish();
+	return hunks;
+};
+
+const parseSnapshot = (
+	rawMetadata: string,
+	patch: string,
+	baseRevision: string,
+	headRevision: string,
+): DiffSnapshot => {
+	const metadata = parseRawMetadata(rawMetadata);
+	const sections = patch.split(/^diff --git /m).slice(1);
+	const files = metadata.map(
+		(file, index): FileDiff => ({
+			path: makeRepoPath(file.path),
+			...(file.previousPath === undefined
+				? {}
+				: { previousPath: makeRepoPath(file.previousPath) }),
+			status: file.status,
+			hunks: parseHunks(sections[index] ?? "", file.path),
+		}),
+	);
+	const base = makeRevision(baseRevision);
+	const head = makeRevision(headRevision);
+	return decodeDiffSnapshot({
+		id: deriveSnapshotId({ base, head, files }),
+		base,
+		head,
+		files,
+	});
+};
 
 const gitDiffSource: DiffSource = {
-	id: "wth.git",
+	id: capabilityId,
+	version: "1",
 	resolve: (input) =>
 		Effect.gen(function* () {
-			const cwd = input.cwd ?? process.cwd();
-			const args = [
-				"diff",
-				"--no-ext-diff",
-				"--unified=3",
-				input.base,
-				input.head,
+			const base = (yield* runGit(
+				["rev-parse", "--verify", `${input.base}^{commit}`],
+				input.cwd,
+			)).trim();
+			const head = (yield* runGit(
+				["rev-parse", "--verify", `${input.head}^{commit}`],
+				input.cwd,
+			)).trim();
+			const pathArgs = input.path === undefined ? [] : ["--", input.path];
+			const common = [
+				"--find-renames",
+				"--find-copies",
+				base,
+				head,
+				...pathArgs,
 			];
-			if (input.path) args.push("--", input.path);
-			const output = yield* runGit(args, cwd);
+			const [raw, patch] = yield* Effect.all(
+				[
+					runGit(["diff", "--raw", "-z", ...common], input.cwd),
+					runGit(
+						[
+							"diff",
+							"--patch",
+							"--no-color",
+							"--no-ext-diff",
+							"--unified=3",
+							...common,
+						],
+						input.cwd,
+					),
+				],
+				{ concurrency: 2 },
+			);
 			return yield* Effect.try({
-				try: () => {
-					const snapshot = parseDiff(output, input.base, input.head);
-					return decodeDiffSnapshot(snapshot);
-				},
+				try: () => parseSnapshot(raw, patch, base, head),
 				catch: (error) =>
 					new DiffError({
-						message: `failed to parse git diff: ${
-							error instanceof Error ? error.message : String(error)
-						}`,
+						capabilityId,
+						message: `failed to parse git diff: ${String(error)}`,
 					}),
 			});
 		}),
 };
 
-// -- ContextProvider capability ----------------------------------------------------
-
-const emptyContextProvider: ContextProvider = {
-	id: "wth.git",
-	collect: () => Stream.empty,
-};
-
 export default definePlugin({
-	id: "wth.git",
+	id: capabilityId,
+	version: "1",
 	apiVersion: 1,
-	capabilities: {
-		diffSources: [gitDiffSource],
-		contextProviders: [emptyContextProvider],
-	},
+	build: Effect.succeed({ diffSources: [gitDiffSource] }),
 });

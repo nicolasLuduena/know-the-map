@@ -1,21 +1,27 @@
-import type {
-	DiffSnapshot,
-	Hunk,
-	HunkExplanation,
-	RepoPath,
+import type { DiffSnapshot, Hunk, HunkId, RepoPath } from "@bleentr/domain";
+import {
+	HunkExplanationSchema,
+	HunkId as HunkIdSchema,
+	ReviewFindingSchema,
 } from "@bleentr/domain";
-import { HunkId } from "@bleentr/domain";
-import type { Option, Stream } from "effect";
+import type { Option, Scope, Stream } from "effect";
 import { Effect, Layer, Schema } from "effect";
 
-// -- Versioned plugin boundary ------------------------------------------------
-
-/** The plugin API version a plugin targets. */
 export const PLUGIN_API_VERSION = 1 as const;
+export type PluginApiVersion = typeof PLUGIN_API_VERSION;
 
-// -- Shared schema types --------------------------------------------------------
+export interface CapabilityMetadata {
+	readonly id: string;
+	/** Bump whenever behavior that participates in cached output changes. */
+	readonly version: string;
+}
 
-/** Where a context fragment came from (LSP, search, git, ...). */
+const UtcTimestamp = Schema.String.pipe(
+	Schema.filter((value) => !Number.isNaN(Date.parse(value)), {
+		message: () => "expected an ISO-8601 timestamp",
+	}),
+);
+
 export const ContextFragmentSourceSchema = Schema.Literal(
 	"lsp.reference",
 	"lsp.call",
@@ -28,65 +34,65 @@ export type ContextFragmentSource = Schema.Schema.Type<
 	typeof ContextFragmentSourceSchema
 >;
 
-/** A symbol's basic info: name, kind, signature, and docs. */
 export const SymbolInfoSchema = Schema.Struct({
 	name: Schema.String,
 	kind: Schema.String,
-	signature: Schema.OptionFromUndefinedOr(Schema.String),
-	documentation: Schema.OptionFromUndefinedOr(Schema.String),
+	signature: Schema.optional(Schema.String),
+	documentation: Schema.optional(Schema.String),
 });
 export type SymbolInfo = Schema.Schema.Type<typeof SymbolInfoSchema>;
 
-/** One piece of context for the analyzer, with why it matters. */
 export const ContextFragmentSchema = Schema.Struct({
 	id: Schema.String,
 	source: ContextFragmentSourceSchema,
 	uri: Schema.String,
-	range: Schema.OptionFromUndefinedOr(
+	range: Schema.optional(
 		Schema.Struct({
 			start: Schema.Struct({
-				line: Schema.Number,
-				character: Schema.Number,
+				line: Schema.NonNegativeInt,
+				character: Schema.NonNegativeInt,
 			}),
 			end: Schema.Struct({
-				line: Schema.Number,
-				character: Schema.Number,
+				line: Schema.NonNegativeInt,
+				character: Schema.NonNegativeInt,
 			}),
 		}),
 	),
-	symbol: Schema.OptionFromUndefinedOr(SymbolInfoSchema),
+	symbol: Schema.optional(SymbolInfoSchema),
 	excerpt: Schema.String,
 	reason: Schema.String,
 });
 export type ContextFragment = Schema.Schema.Type<typeof ContextFragmentSchema>;
 
-/** Limits and options for collecting context about a hunk. */
 export const ContextPolicySchema = Schema.Struct({
-	maxReferencesPerSymbol: Schema.Number,
+	maxReferencesPerSymbol: Schema.NonNegativeInt,
 	includeTests: Schema.Boolean,
 	includeIncomingCalls: Schema.Boolean,
 	includeOutgoingCalls: Schema.Boolean,
-	traversalDepth: Schema.Number,
+	traversalDepth: Schema.NonNegativeInt,
 });
 export type ContextPolicy = Schema.Schema.Type<typeof ContextPolicySchema>;
 
-/** A cached value, with when it was stored and when it expires. */
 export const CacheEntrySchema = Schema.Struct({
 	value: Schema.String,
-	storedAt: Schema.DateTimeUtc,
-	expiresAt: Schema.OptionFromUndefinedOr(Schema.DateTimeUtc),
+	storedAt: UtcTimestamp,
+	expiresAt: Schema.optional(UtcTimestamp),
 });
 export type CacheEntry = Schema.Schema.Type<typeof CacheEntrySchema>;
 
-/** A user's annotation on a hunk. */
 export const AnnotationSchema = Schema.Struct({
-	hunkId: HunkId,
+	hunkId: HunkIdSchema,
 	text: Schema.String,
-	createdAt: Schema.DateTimeUtc,
+	createdAt: UtcTimestamp,
 });
 export type Annotation = Schema.Schema.Type<typeof AnnotationSchema>;
 
-/** Events an agent emits while running: text, tool calls, done. */
+export const AgentMessageSchema = Schema.Struct({
+	role: Schema.Literal("system", "user", "assistant"),
+	content: Schema.String,
+});
+export type AgentMessage = Schema.Schema.Type<typeof AgentMessageSchema>;
+
 export const AgentEventSchema = Schema.Union(
 	Schema.Struct({ _tag: Schema.Literal("Text"), text: Schema.String }),
 	Schema.Struct({
@@ -98,124 +104,132 @@ export const AgentEventSchema = Schema.Union(
 );
 export type AgentEvent = Schema.Schema.Type<typeof AgentEventSchema>;
 
-// -- Capability errors -----------------------------------------------------------
+export const ExplanationEventSchema = Schema.Union(
+	Schema.Struct({ _tag: Schema.Literal("Text"), text: Schema.String }),
+	Schema.Struct({
+		_tag: Schema.Literal("Complete"),
+		explanation: HunkExplanationSchema,
+	}),
+);
+export type ExplanationEvent = Schema.Schema.Type<
+	typeof ExplanationEventSchema
+>;
 
-/** Something went wrong getting a diff. */
+export const ReviewAnalysisEventSchema = Schema.Union(
+	Schema.Struct({ _tag: Schema.Literal("Text"), text: Schema.String }),
+	Schema.Struct({
+		_tag: Schema.Literal("Finding"),
+		finding: ReviewFindingSchema,
+	}),
+	Schema.Struct({ _tag: Schema.Literal("Complete") }),
+);
+export type ReviewAnalysisEvent = Schema.Schema.Type<
+	typeof ReviewAnalysisEventSchema
+>;
+
 export class DiffError extends Schema.TaggedError<DiffError>()("DiffError", {
+	capabilityId: Schema.String,
 	message: Schema.String,
 }) {}
-
-/** Something went wrong collecting context. */
 export class ContextError extends Schema.TaggedError<ContextError>()(
 	"ContextError",
-	{ message: Schema.String },
+	{
+		capabilityId: Schema.String,
+		message: Schema.String,
+	},
 ) {}
-
-/** Something went wrong analyzing a hunk. */
 export class AnalysisError extends Schema.TaggedError<AnalysisError>()(
 	"AnalysisError",
-	{ message: Schema.String },
+	{
+		capabilityId: Schema.String,
+		message: Schema.String,
+	},
 ) {}
-
-/** Something went wrong running an agent. */
 export class AgentRunnerError extends Schema.TaggedError<AgentRunnerError>()(
 	"AgentRunnerError",
-	{ message: Schema.String },
+	{
+		capabilityId: Schema.String,
+		message: Schema.String,
+	},
 ) {}
-
-/** Something went wrong with the cache. */
 export class CacheError extends Schema.TaggedError<CacheError>()("CacheError", {
+	capabilityId: Schema.String,
 	message: Schema.String,
 }) {}
-
-/** Something went wrong with the review store. */
 export class ReviewStoreError extends Schema.TaggedError<ReviewStoreError>()(
 	"ReviewStoreError",
-	{ message: Schema.String },
+	{
+		capabilityId: Schema.String,
+		message: Schema.String,
+	},
+) {}
+export class PluginInitError extends Schema.TaggedError<PluginInitError>()(
+	"PluginInitError",
+	{
+		pluginId: Schema.String,
+		message: Schema.String,
+	},
 ) {}
 
-// -- Capability: DiffSource ----------------------------------------------------
-
-/** What a diff source needs to resolve a diff. */
 export interface DiffSourceInput {
 	readonly base: string;
 	readonly head: string;
 	readonly path?: RepoPath;
-	readonly cwd?: string;
+	readonly cwd: string;
 }
-
-/** Where diffs come from (e.g. local git, a GitHub PR). */
-export interface DiffSource {
-	readonly id: string;
+export interface DiffSource extends CapabilityMetadata {
 	readonly resolve: (
 		input: DiffSourceInput,
 	) => Effect.Effect<DiffSnapshot, DiffError>;
 }
 
-// -- Capability: ContextProvider -------------------------------------------------
-
-/** What a context provider needs to collect context. */
 export interface ContextRequest {
+	readonly snapshot: DiffSnapshot;
 	readonly hunk: Hunk;
 	readonly policy: ContextPolicy;
 }
-
-/** Provides extra context about a hunk (e.g. LSP). Emits fragments in
- * descending order of value: stream order is the ranking, and the consumer
- * truncates at its budget. */
-export interface ContextProvider {
-	readonly id: string;
+export interface ContextProvider extends CapabilityMetadata {
 	readonly collect: (
 		request: ContextRequest,
 	) => Stream.Stream<ContextFragment, ContextError>;
 }
 
-// -- Capability: Analyzer ---------------------------------------------------------
-
-/** What an analyzer needs to explain a hunk. */
 export interface AnalyzeInput {
+	readonly snapshot: DiffSnapshot;
 	readonly hunk: Hunk;
 	readonly context: ReadonlyArray<ContextFragment>;
 }
-
-/** Explains or reviews a hunk. */
-export interface Analyzer {
-	readonly id: string;
+export interface ReviewInput {
+	readonly snapshot: DiffSnapshot;
+	readonly context: ReadonlyArray<ContextFragment>;
+}
+export interface Analyzer extends CapabilityMetadata {
 	readonly analyze: (
 		input: AnalyzeInput,
-	) => Effect.Effect<HunkExplanation, AnalysisError>;
+	) => Stream.Stream<ExplanationEvent, AnalysisError>;
+	readonly review?: (
+		input: ReviewInput,
+	) => Stream.Stream<ReviewAnalysisEvent, AnalysisError>;
 }
 
-// -- Capability: AgentRunner --------------------------------------------------------
-
-/** What an agent runner can do: streaming, tools, and context size. */
 export interface AgentCapabilities {
 	readonly streaming: boolean;
 	readonly tools: boolean;
 	readonly maxContextTokens: number;
 }
-
-/** What an agent runner needs to run. */
 export interface AgentRequest {
-	readonly prompt: string;
-	readonly system?: string;
+	readonly messages: ReadonlyArray<AgentMessage>;
 	readonly model?: string;
+	readonly agent?: string;
 }
-
-/** Runs an agent (e.g. OpenCode). */
-export interface AgentRunner {
-	readonly id: string;
+export interface AgentRunner extends CapabilityMetadata {
 	readonly capabilities: AgentCapabilities;
 	readonly run: (
 		request: AgentRequest,
 	) => Stream.Stream<AgentEvent, AgentRunnerError>;
 }
 
-// -- Capability: CacheStore ----------------------------------------------------------
-
-/** Stores cached results (e.g. SQLite, memory). */
-export interface CacheStore {
-	readonly id: string;
+export interface CacheStore extends CapabilityMetadata {
 	readonly get: (
 		key: string,
 	) => Effect.Effect<Option.Option<CacheEntry>, CacheError>;
@@ -226,11 +240,7 @@ export interface CacheStore {
 	readonly delete: (key: string) => Effect.Effect<void, CacheError>;
 }
 
-// -- Capability: ReviewStore -----------------------------------------------------------
-
-/** Stores review state: viewed hunks and annotations. */
-export interface ReviewStore {
-	readonly id: string;
+export interface ReviewStore extends CapabilityMetadata {
 	readonly markViewed: (
 		hunkId: HunkId,
 	) => Effect.Effect<void, ReviewStoreError>;
@@ -245,125 +255,19 @@ export interface ReviewStore {
 	) => Effect.Effect<ReadonlyArray<Annotation>, ReviewStoreError>;
 }
 
-// -- Capability: PromptPolicy ------------------------------------------------------------
-
-/** Builds prompts for analyzers and agents. */
-export interface PromptPolicy {
-	readonly id: string;
+export interface PromptPolicy extends CapabilityMetadata {
 	readonly buildPrompt: (input: AnalyzeInput) => string;
+	readonly buildQuestionPrompt: (
+		input: AnalyzeInput,
+		question: string,
+	) => string;
 }
 
-// -- Capability: LanguageServerDefinition -------------------------------------------------
-
-/** Declares a language server to launch. */
-export interface LanguageServerDefinition {
-	readonly id: string;
+export interface LanguageServerDefinition extends CapabilityMetadata {
 	readonly languages: ReadonlyArray<string>;
 	readonly command: ReadonlyArray<string>;
 }
 
-// -- Aggregate service tags ------------------------------------------------------------
-// Registered plugins, grouped by capability. The engine reads these; plugins fill them.
-
-export class DiffSources extends Effect.Service<DiffSources>()(
-	"wth/DiffSources",
-	{
-		succeed: [] as ReadonlyArray<DiffSource>,
-	},
-) {}
-
-export class ContextProviders extends Effect.Service<ContextProviders>()(
-	"wth/ContextProviders",
-	{
-		succeed: [] as ReadonlyArray<ContextProvider>,
-	},
-) {}
-
-export class Analyzers extends Effect.Service<Analyzers>()("wth/Analyzers", {
-	succeed: [] as ReadonlyArray<Analyzer>,
-}) {}
-
-export class AgentRunners extends Effect.Service<AgentRunners>()(
-	"wth/AgentRunners",
-	{
-		succeed: [] as ReadonlyArray<AgentRunner>,
-	},
-) {}
-
-export class CacheStores extends Effect.Service<CacheStores>()(
-	"wth/CacheStores",
-	{
-		succeed: [] as ReadonlyArray<CacheStore>,
-	},
-) {}
-
-export class ReviewStores extends Effect.Service<ReviewStores>()(
-	"wth/ReviewStores",
-	{
-		succeed: [] as ReadonlyArray<ReviewStore>,
-	},
-) {}
-
-export class PromptPolicies extends Effect.Service<PromptPolicies>()(
-	"wth/PromptPolicies",
-	{
-		succeed: [] as ReadonlyArray<PromptPolicy>,
-	},
-) {}
-
-export class LanguageServerDefinitions extends Effect.Service<LanguageServerDefinitions>()(
-	"wth/LanguageServerDefinitions",
-	{
-		succeed: [] as ReadonlyArray<LanguageServerDefinition>,
-	},
-) {}
-
-/** Every service a plugin can fill, as one union. */
-export type CapabilityServices =
-	| DiffSources
-	| ContextProviders
-	| Analyzers
-	| AgentRunners
-	| CacheStores
-	| ReviewStores
-	| PromptPolicies
-	| LanguageServerDefinitions;
-
-/** Turns a plugin's capabilities into a layer the engine can consume. */
-export const capabilityLayers = (
-	capabilities: PluginCapabilities,
-): Layer.Layer<CapabilityServices> =>
-	Layer.mergeAll(
-		Layer.succeed(DiffSources, new DiffSources(capabilities.diffSources ?? [])),
-		Layer.succeed(
-			ContextProviders,
-			new ContextProviders(capabilities.contextProviders ?? []),
-		),
-		Layer.succeed(Analyzers, new Analyzers(capabilities.analyzers ?? [])),
-		Layer.succeed(
-			AgentRunners,
-			new AgentRunners(capabilities.agentRunners ?? []),
-		),
-		Layer.succeed(CacheStores, new CacheStores(capabilities.cacheStores ?? [])),
-		Layer.succeed(
-			ReviewStores,
-			new ReviewStores(capabilities.reviewStores ?? []),
-		),
-		Layer.succeed(
-			PromptPolicies,
-			new PromptPolicies(capabilities.promptPolicies ?? []),
-		),
-		Layer.succeed(
-			LanguageServerDefinitions,
-			new LanguageServerDefinitions(
-				capabilities.languageServerDefinitions ?? [],
-			),
-		),
-	);
-
-// -- Plugin definition ----------------------------------------------------------------------
-
-/** What a plugin can contribute. All parts are optional. */
 export interface PluginCapabilities {
 	readonly diffSources?: ReadonlyArray<DiffSource>;
 	readonly contextProviders?: ReadonlyArray<ContextProvider>;
@@ -375,18 +279,129 @@ export interface PluginCapabilities {
 	readonly languageServerDefinitions?: ReadonlyArray<LanguageServerDefinition>;
 }
 
-/** A plugin's declaration: id, API version, and capabilities. */
-export interface PluginDefinition<
-	C extends PluginCapabilities = PluginCapabilities,
-> {
+export interface PluginDefinition {
 	readonly id: string;
-	readonly apiVersion: typeof PLUGIN_API_VERSION;
-	readonly capabilities: C;
+	readonly version: string;
+	readonly apiVersion: PluginApiVersion;
+	readonly build: Effect.Effect<
+		PluginCapabilities,
+		PluginInitError,
+		Scope.Scope
+	>;
 }
 
-/** Type-checks a plugin declaration against the capability contracts. */
-export function definePlugin<C extends PluginCapabilities>(
-	plugin: PluginDefinition<C>,
-): PluginDefinition<C> {
-	return plugin;
+export const definePlugin = (plugin: PluginDefinition): PluginDefinition =>
+	plugin;
+
+type CapabilityKind = keyof PluginCapabilities;
+const capabilityKinds: ReadonlyArray<CapabilityKind> = [
+	"diffSources",
+	"contextProviders",
+	"analyzers",
+	"agentRunners",
+	"cacheStores",
+	"reviewStores",
+	"promptPolicies",
+	"languageServerDefinitions",
+];
+
+export interface PluginRegistryShape {
+	readonly plugins: ReadonlyMap<
+		string,
+		{ readonly id: string; readonly version: string }
+	>;
+	readonly diffSources: ReadonlyMap<string, DiffSource>;
+	readonly contextProviders: ReadonlyMap<string, ContextProvider>;
+	readonly analyzers: ReadonlyMap<string, Analyzer>;
+	readonly agentRunners: ReadonlyMap<string, AgentRunner>;
+	readonly cacheStores: ReadonlyMap<string, CacheStore>;
+	readonly reviewStores: ReadonlyMap<string, ReviewStore>;
+	readonly promptPolicies: ReadonlyMap<string, PromptPolicy>;
+	readonly languageServerDefinitions: ReadonlyMap<
+		string,
+		LanguageServerDefinition
+	>;
 }
+
+export class PluginRegistry extends Effect.Tag("wth/PluginRegistry")<
+	PluginRegistry,
+	PluginRegistryShape
+>() {}
+
+const addCapabilities = <A extends CapabilityMetadata>(
+	pluginId: string,
+	kind: string,
+	target: Map<string, A>,
+	values: ReadonlyArray<A> | undefined,
+): Effect.Effect<void, PluginInitError> =>
+	Effect.forEach(values ?? [], (value) =>
+		target.has(value.id)
+			? Effect.fail(
+					new PluginInitError({
+						pluginId,
+						message: `duplicate ${kind} capability id: ${value.id}`,
+					}),
+				)
+			: Effect.sync(() => target.set(value.id, value)),
+	).pipe(Effect.asVoid);
+
+export const makePluginRegistryLayer = (
+	definitions: ReadonlyArray<PluginDefinition>,
+): Layer.Layer<PluginRegistry, PluginInitError> =>
+	Layer.scoped(
+		PluginRegistry,
+		Effect.gen(function* () {
+			const pluginIds = new Set<string>();
+			const built: Array<readonly [PluginDefinition, PluginCapabilities]> = [];
+			for (const definition of definitions) {
+				if (pluginIds.has(definition.id)) {
+					return yield* Effect.fail(
+						new PluginInitError({
+							pluginId: definition.id,
+							message: "duplicate plugin id",
+						}),
+					);
+				}
+				if (definition.apiVersion !== PLUGIN_API_VERSION) {
+					return yield* Effect.fail(
+						new PluginInitError({
+							pluginId: definition.id,
+							message: `unsupported plugin API version: ${definition.apiVersion}`,
+						}),
+					);
+				}
+				pluginIds.add(definition.id);
+				built.push([definition, yield* definition.build]);
+			}
+
+			const registry = {
+				plugins: new Map<
+					string,
+					{ readonly id: string; readonly version: string }
+				>(),
+				diffSources: new Map<string, DiffSource>(),
+				contextProviders: new Map<string, ContextProvider>(),
+				analyzers: new Map<string, Analyzer>(),
+				agentRunners: new Map<string, AgentRunner>(),
+				cacheStores: new Map<string, CacheStore>(),
+				reviewStores: new Map<string, ReviewStore>(),
+				promptPolicies: new Map<string, PromptPolicy>(),
+				languageServerDefinitions: new Map<string, LanguageServerDefinition>(),
+			};
+			for (const [definition, capabilities] of built) {
+				registry.plugins.set(definition.id, {
+					id: definition.id,
+					version: definition.version,
+				});
+				for (const kind of capabilityKinds) {
+					yield* addCapabilities(
+						definition.id,
+						kind,
+						registry[kind] as Map<string, CapabilityMetadata>,
+						capabilities[kind] as ReadonlyArray<CapabilityMetadata> | undefined,
+					);
+				}
+			}
+			return registry;
+		}),
+	);

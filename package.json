@@ -7,6 +7,7 @@
 		"plugins/*"
 	],
 	"scripts": {
+		"test": "bun test",
 		"typecheck": "bun run --workspaces typecheck",
 		"lint": "biome check .",
 		"format": "biome format --write .",
@@ -15,6 +16,7 @@
 	"devDependencies": {
 		"@biomejs/biome": "^2.5.8",
 		"@types/node": "^24.0.0",
+		"bun-types": "^1.3.14",
 		"effect": "^3.22.1",
 		"typescript": "^7.0.2"
 	}

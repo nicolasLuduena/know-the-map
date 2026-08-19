@@ -20,23 +20,24 @@ Bun workspaces: root `package.json` declares `packages/*` and `plugins/*`.
 - `packages/domain` — `@bleentr/domain` — Effect.Schema-branded IDs, immutable
   diff types. Serializable values only; no process/HTTP/UI code.
 - `packages/plugin-api` — `@bleentr/plugin-api` — the 8 versioned capability
-  contracts + `definePlugin`.
+  contracts, scoped `PluginRegistry`, and `definePlugin`.
 - `packages/api` — `@bleentr/api` — transport-independent `ReviewApi`
   (`resolveDiff`, `explainHunk`, `askAboutHunk`, `reviewDiff`).
 - `packages/engine` — `@bleentr/engine` — use cases and orchestration.
 - `packages/scheduler` — `@bleentr/scheduler` — concurrency, priorities,
   deduplication (`AnalysisScheduler`).
-- `packages/tui` — `@bleentr/tui` — terminal app on `@opentui/core`. One
-  client of the API, not the app itself.
+- `packages/tui` — `@bleentr/tui` — reserved for the terminal client. The
+  OpenTUI implementation is deferred; it will be one client of the API, not
+  the app itself.
 - `plugins/git` — `@bleentr/plugin-git` — local `git diff` → hunks.
-- `plugins/opencode-v2` — `@bleentr/plugin-opencode-v2` — `AgentRunner` over
-  the OpenCode V2 client/server boundary.
-- `plugins/sqlite` — `@bleentr/plugin-sqlite` — content-addressed cache +
-  review store.
+- `plugins/opencode-v2` — `@bleentr/plugin-opencode-v2` — reserved adapter
+  package; no runner is registered until structured streaming and cancellation
+  are implemented.
+- `plugins/sqlite` — `@bleentr/plugin-sqlite` — scoped content-addressed cache.
 
-Contracts defined, no implementation yet: `plugins/github`, `plugins/lsp-*`,
-`plugins/context-lsp-semantic`, `LanguageServerManager`,
-`WorkspaceMaterializer`, `CodeIntelligence`.
+Contracts defined, no implementation yet: `ReviewStore`, OpenCode,
+`plugins/github`, `plugins/lsp-*`, `plugins/context-lsp-semantic`,
+`LanguageServerManager`, `WorkspaceMaterializer`, `CodeIntelligence`.
 
 ## Commands
 
@@ -44,6 +45,7 @@ Bun is the package manager and runtime. `bun.lock` is committed; CI uses
 `bun install --frozen-lockfile`.
 
 - `bun run typecheck` — `tsc --noEmit` in every workspace package
+- `bun run test` — runtime tests for contracts, layers, cancellation, and integrations
 - `bun run lint` — Biome check (lint + format) over the whole repo
 - `bun run format` — Biome format --write
 - `bun run check` — typecheck + lint
@@ -76,6 +78,8 @@ Bun is the package manager and runtime. `bun.lock` is committed; CI uses
   sections); the TUI owns rendering. No plugin-provided UI components.
 - OpenCode is an adapter, not domain: the boundary is `AgentRunner`, never an
   `OpenCodeService` in the domain model.
+- Plugins are scoped builders aggregated once into `PluginRegistry`. Never
+  merge multiple layers that publish the same aggregate capability tags.
 
 # Learning more about Effect
 

@@ -10,7 +10,6 @@
 		"typecheck": "tsc --noEmit"
 	},
 	"dependencies": {
-		"@bleentr/domain": "workspace:*",
 		"@bleentr/plugin-api": "workspace:*",
 		"effect": "^3.22.1"
 	},

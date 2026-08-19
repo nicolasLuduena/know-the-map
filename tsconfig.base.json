@@ -15,6 +15,6 @@
 		"forceConsistentCasingInFileNames": true,
 		"skipLibCheck": true,
 		"noEmit": true,
-		"types": ["node"]
+		"types": ["node", "bun-types"]
 	}
 }

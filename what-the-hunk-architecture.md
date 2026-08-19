@@ -96,6 +96,12 @@ export default definePlugin({
 
 Each capability implementation can be provided as an Effect service or layer.
 
+Plugins are scoped builders. The composition root builds each plugin once,
+validates plugin/API/capability identities, and concatenates contributions into
+one immutable `PluginRegistry`. This is intentionally not implemented by
+merging repeated aggregate service tags: duplicate Effect tags overwrite one
+another instead of providing multi-binding semantics.
+
 Generic hooks such as `onBeforeAnything` and `onAfterAnything` should be avoided. Once several plugins mutate the same value, ordering and behavior become difficult to understand. Use explicit capability selection and named middleware pipelines where transformation is genuinely necessary.
 
 The following invariants should not be plugin-replaceable:
@@ -119,7 +125,7 @@ interface ReviewApi {
 
   explainHunk(
     input: ExplainHunkInput
-  ): Effect.Effect<HunkExplanation, AnalysisError>
+  ): Stream.Stream<ExplanationEvent, AnalysisError>
 
   askAboutHunk(
     input: AskAboutHunkInput
@@ -195,7 +201,11 @@ interface AgentRunner {
 }
 ```
 
-The first implementation can be `OpenCodeV2Runner`. Future implementations can include direct provider APIs, Ollama, command-based runners, or test doubles.
+The first implementation can be `OpenCodeV2Runner`. It must expose structured
+events and forward Effect interruption to the underlying request/process; a
+buffered formatted CLI transcript is not an `AgentRunner` implementation.
+Future implementations can include direct provider APIs, Ollama, command-based
+runners, or test doubles.
 
 OpenCode V2's plugin API is currently beta, and its Effect-native embedded SDK is not yet published externally. The initial adapter should therefore use the available V2 client/server boundary. When the embedded SDK stabilizes, only this adapter needs to change.
 
