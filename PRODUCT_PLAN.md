@@ -1,4 +1,4 @@
-# Diff Buddy — Proposed Product Direction
+# What the Hunk? — Proposed Product Direction
 
 > **Status:** Proposal for discussion. This document authorizes no
 > implementation. The existing GitHub issues remain the active roadmap until
@@ -6,9 +6,10 @@
 
 ## The pivot
 
-Diff Buddy should be a local code-review service with interchangeable clients.
+What the Hunk? (WTH) should be a local code-review service with interchangeable
+clients.
 
-The `diff-buddy` binary is the product core and source of truth. It owns:
+The `wth` binary is the product core and source of truth. It owns:
 
 - repository and workspace access;
 - Git revisions, diffs, and stable hunk identity;
@@ -19,27 +20,27 @@ The `diff-buddy` binary is the product core and source of truth. It owns:
 - annotations;
 - invariants, evidence, and impact analysis.
 
-The binary also bundles and serves a Svelte/Monaco reference client locally.
-Running Diff Buddy should open a complete browser-based review workspace without
-requiring an account, hosted Diff Buddy backend, or source-code transfer through
-Diff Buddy infrastructure.
+The binary may also bundle and serve a Svelte/Monaco client locally. That is a
+later delivery target, after the core interaction and protocol have been proven
+through Neovim. It must require no account, hosted WTH backend, or source-code
+transfer through WTH infrastructure.
 
 The same service exposes a small, versioned, frontend-neutral protocol. A thin
 Neovim plugin and future VS Code, Zed, CLI, or TUI clients render the same review
 model without reimplementing repository access or analysis.
 
 ```text
-                         ┌─ bundled Svelte/Monaco client
-                         ├─ Neovim plugin
-diff-buddy local service ┼─ future editor clients
-                         └─ diagnostic CLI or TUI
+                  ┌─ Neovim plugin (first)
+wth local service ┼─ bundled Svelte/Monaco client (later)
+                  ├─ future editor clients
+                  └─ diagnostic CLI or TUI
 ```
 
 The durable boundary is the local service, not a particular interface.
 
 ## Product thesis
 
-Diff Buddy is a **hunk-centered code exploration and review tool**.
+WTH is a **hunk-centered code exploration and review tool**.
 
 It is not a general-purpose AI editor. A review begins with a concrete diff and
 uses each changed hunk as the root of a small semantic and impact graph:
@@ -66,19 +67,18 @@ The architectural rule remains unchanged:
 
 ## Local-first experience
 
-The default entry point should be:
+The eventual zero-setup entry point should be:
 
 ```sh
-diff-buddy main...HEAD
+wth review main...HEAD
 ```
 
 It resolves the repository and revisions, starts or attaches to the local
-service, creates a review workspace, and opens an authenticated loopback URL.
-The initial screen loads the file tree, normalized diff, and review state;
-semantic and AI work begins only when requested.
+service, and creates a review workspace. `wth serve --no-open`, `wth status`,
+and `wth stop` support editor clients and explicit lifecycle control. Semantic
+and AI work begins only when requested.
 
-The bundled Svelte/Monaco client is the reference implementation and zero-setup
-experience. It should provide:
+The later bundled Svelte/Monaco client should provide:
 
 - repository navigation with file contents loaded on demand;
 - changed-file, hunk, diff, and source views;
@@ -94,7 +94,16 @@ navigate the entire codebase, but editing, formatting, terminals, debugging,
 source-control operations, and extension compatibility are deferred.
 
 All application assets must ship with the binary. The default experience must
-not depend on a CDN, hosted font, telemetry endpoint, or Diff Buddy server.
+not depend on a CDN, hosted font, telemetry endpoint, or WTH server.
+
+## Naming
+
+- Product: **What the Hunk?**
+- Binary and command prefix: `wth`
+- Protocol family: `wth/1`
+
+Renaming is deferred until the workflow is validated. The architecture must not
+encode the product name in domain concepts that should remain reusable.
 
 ## Authority and client sessions
 
@@ -138,7 +147,7 @@ scoped processes, connections, stores, and client sessions.
 
 ## Frontend-neutral protocol
 
-Diff Buddy should define one versioned message schema with transport adapters:
+WTH should define one versioned message schema with transport adapters:
 
 - WebSocket for the bundled browser client;
 - stdio for Neovim and command-line integrations;
@@ -189,7 +198,7 @@ The frontend protocol receives normalized semantic evidence:
 
 ## AI and privacy boundary
 
-Source code must never pass through Diff Buddy-operated infrastructure in the
+Source code must never pass through WTH-operated infrastructure in the
 local-first product.
 
 A configured remote AI provider may still receive selected context. The UI must
@@ -251,42 +260,77 @@ ownership. One repository service coordinates concurrent clients.
 
 ## Client strategy
 
-### Reference client: bundled web application
+### First client: Neovim
 
-The Svelte/Monaco application defines the complete supported workflow and
-validates the frontend-neutral protocol.
+Neovim is the first validation surface. Its users already have code navigation,
+buffers, splits, and established review habits, so a small plugin can test the
+actual WTH interaction without first building another editor.
 
-### First external client: Neovim
+The plugin stays thin. It uses normal buffers, extmarks, virtual lines,
+highlights, location lists, splits, and floats. Git parsing, LSP processes,
+caching, prompts, and analysis remain in the service.
 
-The Neovim plugin stays thin. It uses normal buffers, extmarks, virtual lines,
-highlights, location lists, splits, and floats. It submits overlays and renders
-the same review values as the web client. Git parsing, LSP processes, caching,
-prompts, and analysis remain in the service.
+### Later client: bundled web application
+
+After the protocol and interaction are stable, Svelte/Monaco becomes the
+zero-setup browser experience and the most complete client. It should consume
+the same review values instead of defining a separate application model.
 
 ### Future clients
 
 - VS Code should prefer native editor surfaces.
-- Zed depends on its extension API supporting the required UI and process
-  communication.
+- Zed is a target, not a promise; it depends on the extension API supporting the
+  required UI and process communication.
 - A CLI or TUI may serve diagnostics and automation, not the primary experience.
+
+Compatibility means one shared domain and protocol with client-specific
+transports and rendering. It does not mean identical interfaces.
+
+## First vertical slice
+
+Build only enough to validate the hunk-review loop:
+
+```text
+wth local service
+  -> resolve Git diff
+  -> expose normalized hunks over stdio
+  -> Neovim marks hunks
+  -> [h and ]h navigate
+  -> explain hunk at cursor
+  -> stream answer into a split
+  -> cancel when the buffer changes
+```
+
+Initial commands:
+
+- `:WthStart [base]`
+- `:WthExplain`
+- `:WthNext`
+- `:WthPrev`
+- `:WthStop`
+
+Then add, in order: evidence jumps, follow-up questions, service-owned language
+servers, invariants, impact analysis, and annotations or persisted review state.
 
 ## Proposed milestones
 
 These milestones describe sequencing, not implementation authorized by this
 document.
 
-1. **Accept and reconcile the plan.** Confirm the local service and bundled web
-   client; then update architecture documents and issues.
-2. **Establish the service boundary.** Define protocol schemas, client sessions,
-   WebSocket and stdio transports, overlays, cancellation, and security.
-3. **Validate the bundled workspace.** Navigate files and diffs, stream hunk
-   analysis, and persist annotations and viewed state.
-4. **Add semantic evidence.** Manage language servers and add TypeScript
-   invariants and evidence-backed impact graphs.
-5. **Validate Neovim.** Build the thin client and synchronize overlays without
-   moving analysis logic into Lua.
-6. **Consider other clients** only after the protocol and reference workflow are
-   stable.
+1. **Accept and reconcile the plan.** Confirm the local service and Neovim-first
+   validation strategy; then update architecture documents and issues.
+2. **Establish the minimum service boundary.** Define the `wth/1` values needed
+   for the first slice, stdio transport, stream identity, and cancellation while
+   preserving a clean path to WebSocket and client sessions.
+3. **Validate the Neovim loop.** Mark and navigate hunks, explain the hunk at the
+   cursor, stream into a split, and cancel analysis when the buffer changes.
+4. **Make explanations navigable.** Add evidence jumps, follow-up questions, and
+   service-owned language-server context.
+5. **Deepen review semantics.** Add TypeScript invariants, evidence-backed impact
+   graphs, annotations, and persisted review state.
+6. **Build the bundled browser client.** Add the Svelte/Monaco zero-setup
+   experience over WebSocket using the already validated protocol.
+7. **Consider other clients** only after the protocol and workflow are stable.
 
 ## Proposed issue migration
 
@@ -297,16 +341,17 @@ No issue is changed by this branch. If the proposal is accepted:
 | #1–#6 | Close after the production-foundation PR merges; create focused follow-ups for new domain, protocol, session, and overlay work. |
 | #7 | Keep as the first real OpenCode `AgentRunner` milestone. |
 | #8 | Split completed cache work from review state, annotations, and migrations. |
-| #9 | Replace with bundled Svelte/Monaco and thin Neovim client milestones. |
-| #10 | Rewrite around binary → web and binary → Neovim end-to-end flows. |
+| #9 | Replace first with the minimal Neovim client; track the bundled web client as a later milestone. |
+| #10 | Rewrite around binary → Neovim end-to-end first, then binary → web. |
 | #11 | Rewrite around service-owned language servers and workspace-view isolation. |
 | #12 | Keep deferred; workspace materialization and isolation remain prerequisites. |
 | #13 | Keep deferred. |
 
 ## Non-goals for the first product slice
 
-- A hosted Diff Buddy backend.
-- Sending repositories through Diff Buddy infrastructure.
+- A hosted WTH backend.
+- Sending repositories through WTH infrastructure.
+- A bundled browser application in the first validation slice.
 - Turning Monaco into a full replacement IDE.
 - Editing, terminals, debugging, formatters, or source-control actions in the
   first browser client.
@@ -317,11 +362,11 @@ No issue is changed by this branch. If the proposal is accepted:
 
 ## Decision record
 
-This proposal chooses the local `diff-buddy` binary as the authoritative
-backend, Svelte/Monaco as the bundled reference client, Neovim as the first thin
-external client, one versioned protocol over WebSocket and stdio, backend-owned
-Git/LSP/analysis/state, client-scoped overlays, lazy loading, TypeScript-first
-invariants, evidence tiers, and local-only authenticated operation.
+This proposal chooses the local `wth` binary as the authoritative backend,
+Neovim as the first implemented client, Svelte/Monaco as a later bundled client,
+one versioned frontend-neutral protocol, backend-owned Git/LSP/analysis/state,
+client-scoped overlays, lazy loading, TypeScript-first invariants, evidence
+tiers, and local-only authenticated operation.
 
 ## References
 
