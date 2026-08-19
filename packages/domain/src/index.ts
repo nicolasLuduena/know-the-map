@@ -50,13 +50,41 @@ export const LineRangeSchema = Schema.Struct({
 });
 export type LineRange = Schema.Schema.Type<typeof LineRangeSchema>;
 
-/** One line of a diff. Old/new line numbers exist only on the side the line belongs to. */
-export const DiffLineSchema = Schema.Struct({
-	kind: DiffLineKindSchema,
-	oldLineNumber: Schema.optional(Schema.Number),
-	newLineNumber: Schema.optional(Schema.Number),
+/** An unchanged line: present on both sides of the diff. */
+export const DiffLineContextSchema = Schema.Struct({
+	kind: Schema.Literal("context"),
+	oldLineNumber: Schema.Number,
+	newLineNumber: Schema.Number,
 	content: Schema.String,
 });
+export type DiffLineContext = Schema.Schema.Type<typeof DiffLineContextSchema>;
+
+/** An added line: exists only in the new file. */
+export const DiffLineAdditionSchema = Schema.Struct({
+	kind: Schema.Literal("addition"),
+	newLineNumber: Schema.Number,
+	content: Schema.String,
+});
+export type DiffLineAddition = Schema.Schema.Type<
+	typeof DiffLineAdditionSchema
+>;
+
+/** A removed line: exists only in the old file. */
+export const DiffLineDeletionSchema = Schema.Struct({
+	kind: Schema.Literal("deletion"),
+	oldLineNumber: Schema.Number,
+	content: Schema.String,
+});
+export type DiffLineDeletion = Schema.Schema.Type<
+	typeof DiffLineDeletionSchema
+>;
+
+/** One line of a diff. The kind decides which line numbers exist. */
+export const DiffLineSchema = Schema.Union(
+	DiffLineContextSchema,
+	DiffLineAdditionSchema,
+	DiffLineDeletionSchema,
+);
 export type DiffLine = Schema.Schema.Type<typeof DiffLineSchema>;
 
 /** One contiguous part of a diff. Its id comes from the content, not its position. */
