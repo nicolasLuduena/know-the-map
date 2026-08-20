@@ -1,12 +1,11 @@
-# What the Hunk? — Proposed Local Wiki Architecture
+# Know the Map by Bleentr — Proposed Local Wiki Architecture
 
 > **Status:** Proposal for discussion.
 >
 > This document refines the product direction in
 > [`PRODUCT_PLAN.md`](../../PRODUCT_PLAN.md) into a smaller implementation model.
-> If accepted, it supersedes the hunk-centered implementation design in
-> [`what-the-hunk-architecture.md`](../../what-the-hunk-architecture.md), but not
-> the product thesis in `PRODUCT_PLAN.md`.
+> The product thesis in `PRODUCT_PLAN.md` remains authoritative where the two
+> documents differ.
 
 Companion documents:
 
@@ -17,8 +16,8 @@ Companion documents:
 
 ## Decision summary
 
-What the Hunk? (WTH) is a local, AI-maintained repository wiki with semantic
-code review built on top of the same knowledge.
+Know the Map is a local, AI-maintained repository wiki with semantic code review
+built on top of the same knowledge.
 
 The wiki stores two fundamentally different kinds of knowledge:
 
@@ -26,9 +25,9 @@ The wiki stores two fundamentally different kinds of knowledge:
 2. **Interpretations** — human or AI-authored statements about what that
    evidence means.
 
-Every interpretation is scoped to code. When that code changes, WTH can identify
-which interpretations may no longer hold, revalidate them, and explain the
-semantic impact of a pull request.
+Every interpretation is scoped to code. When that code changes, Know the Map can
+identify which interpretations may no longer hold, revalidate them, and explain
+the semantic impact of a pull request.
 
 ```text
 Wiki at base revision
@@ -42,10 +41,10 @@ human accepts, corrects, or rejects proposed knowledge
 Wiki at head revision
 ```
 
-OpenCode V2 is the first execution harness. WTH owns repository snapshots,
-knowledge, decomposition, task orchestration, freshness, and user decisions.
-OpenCode owns model sessions, tools, subagents, provider selection, and streamed
-execution.
+OpenCode V2 is the first execution harness. Know the Map owns repository
+snapshots, knowledge, decomposition, task orchestration, freshness, and user
+decisions. OpenCode owns model sessions, tools, subagents, provider selection,
+and streamed execution.
 
 ## Design principles
 
@@ -54,7 +53,7 @@ execution.
 Code is not prose, and generated prose is not code truth. An interpretation may
 be useful, accepted, and current without becoming hard evidence.
 
-WTH records these dimensions separately:
+Know the Map records these dimensions separately:
 
 - **Origin:** deterministic tool, AI, or user.
 - **Freshness:** current, possibly affected, stale, or orphaned.
@@ -80,13 +79,13 @@ version is tied to a snapshot and a manifest of the code it covers.
 
 ### The application orchestrates; the harness executes
 
-The planning model may decide that a component needs subdivision, but WTH owns
+The planning model may decide that a component needs subdivision, but Know the Map owns
 the bounded task graph. It enforces recursion depth, concurrency, cost limits,
 permissions, cancellation, retries, and result validation.
 
 ### Prefer deep modules
 
-WTH should have a few modules that each hide meaningful complexity. Storage
+Know the Map should have a few modules that each hide meaningful complexity. Storage
 tables, Git commands, prompt fragments, OpenCode sessions, and HTTP endpoints
 are implementation details behind those modules rather than packages of their
 own.
@@ -192,7 +191,7 @@ It owns:
 - configuring models, agents, and read-only permissions;
 - streaming normalized execution events;
 - collecting and validating structured task results;
-- translating provider and harness failures into WTH errors.
+- translating provider and harness failures into domain errors.
 
 The first adapter is `OpenCodeV2Harness`, using the public V2 server/client
 boundary. The not-yet-public embedded SDK can replace its internals later.
@@ -380,7 +379,7 @@ repository by default.
 
 ## Skill-like context loading
 
-WTH exposes repository knowledge progressively:
+Know the Map exposes repository knowledge progressively:
 
 ```text
 Level 0 — component descriptor
@@ -401,9 +400,9 @@ only for likely components. Large component trees are hierarchical: loading a
 parent reveals its child descriptors.
 
 OpenCode V2 skills are a promising delivery mechanism because their descriptions
-can be advertised separately from their bodies. WTH may initially implement the
-same behavior through explicit knowledge tools, then expose dynamic native skills
-when that integration is stable.
+can be advertised separately from their bodies. Know the Map may initially
+implement the same behavior through explicit knowledge tools, then expose dynamic
+native skills when that integration is stable.
 
 ## Semantic code review
 
@@ -457,17 +456,17 @@ OpenCodeV2Harness.execute(task, context)
   → ensure or attach to service internally
   → create session at repository location
   → configure task agent and read-only permissions
-  → prompt with WTH task envelope
+  → prompt with the `AnalysisTask` envelope
   → stream normalized events
   → receive structured result
   → validate anchors and result schema
 ```
 
-WTH defines the task/result schemas. OpenCode session, message, tool, and model
+Know the Map defines the task/result schemas. OpenCode session, message, tool, and model
 types must not leak into the domain modules.
 
 Agents used for indexing and review deny edits. Shell access is denied by
-default or restricted to explicitly allowed read-only commands. WTH supplies
+default or restricted to explicitly allowed read-only commands. Know the Map supplies
 repository and knowledge access through bounded tools.
 
 References:

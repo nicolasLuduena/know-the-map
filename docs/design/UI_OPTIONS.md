@@ -1,4 +1,4 @@
-# Know the Map — Review UI Options
+# Know the Map by Bleentr — Review UI Options
 
 > **Status:** Design exploration. These probes test interaction hierarchy and
 > information architecture; they are not implementation specifications.
@@ -377,17 +377,17 @@ Illustrative entry points:
 
 ```sh
 # Review a PR or commit range
-wth review main...feature/session-store
+ktm review main...feature/session-store
 
 # Review the current working tree after an agent run
-wth review --worktree
+ktm review --worktree
 
 # Explore the current repository wiki
-wth open
+ktm open
 ```
 
-The product name is Know the Map by Bleentr; the binary can remain `wth` until a
-separate naming decision is made.
+The product name is Know the Map by Bleentr; the binary and command prefix are
+`ktm`.
 
 The browser is a client of the local service. Refreshing or opening another tab
 does not start duplicate analysis. Source files are loaded on demand, and the UI

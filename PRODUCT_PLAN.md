@@ -1,4 +1,4 @@
-# What the Hunk? — Repository & Change Intelligence
+# Know the Map by Bleentr — Repository & Change Intelligence
 
 > **Status:** Approved product direction and source of truth for future product planning.
 > This document defines the product thesis. Existing architecture and roadmap issues
@@ -7,7 +7,7 @@
 
 ## Product thesis
 
-What the Hunk? (WTH) should be a **human-first repository and change intelligence system**.
+Know the Map should be a **human-first repository and change intelligence system**.
 
 The product is not primarily an AI reviewer and it is no longer centered on individual
 hunks as the top-level abstraction. Its job is to reduce the amount of system state a
@@ -26,7 +26,7 @@ which questions remain unanswered.
 
 ## Product model
 
-WTH has three primary layers:
+Know the Map has three primary layers:
 
 1. **Harness / execution** — how analysis is performed and who pays for inference.
 2. **Repository intelligence** — a persistent structural and semantic model of the codebase.
@@ -53,14 +53,14 @@ PR review is the interaction built on top of these layers.
 
 ## Harness / execution layer
 
-The harness is a first-class replaceable capability. WTH should not require users to
-pay WTH for every model invocation.
+The harness is a first-class replaceable capability. Know the Map should not
+require users to buy inference from Bleentr for every model invocation.
 
 Users should be able to reuse an existing coding-agent subscription, local model, or
 provider account through interchangeable runners such as:
 
 ```text
-WTH
+Know the Map
  ├─ OpenCode
  ├─ Codex
  ├─ Claude Code
@@ -75,16 +75,16 @@ privacy and cost requirements.
 
 The durable abstraction is a harness capability, not a specific provider SDK.
 Different harnesses may expose different capabilities, permissions, context limits,
-streaming semantics, or tools; WTH should normalize those differences behind a common
-review-task boundary where practical.
+streaming semantics, or tools; Know the Map should normalize those differences behind
+a common review-task boundary where practical.
 
 Direct API integration remains useful, but it should be an adapter rather than the
 architectural center.
 
 ## Repository intelligence
 
-WTH maintains a structured representation of the repository. Generated prose is useful,
-but prose is not the source of truth.
+Know the Map maintains a structured representation of the repository. Generated prose
+is useful, but prose is not the source of truth.
 
 The repository model should include, as available:
 
@@ -121,10 +121,10 @@ Every generated explanation should remain traceable to concrete repository evide
 
 ## The temporal repository model
 
-A conventional repository wiki answers what the repository is now. WTH must also model
-how it changes over time.
+A conventional repository wiki answers what the repository is now. Know the Map must
+also model how it changes over time.
 
-Git already provides immutable repository states. WTH should derive semantic state by
+Git already provides immutable repository states. Know the Map should derive semantic state by
 commit and preserve enough structure to compare states efficiently.
 
 ```text
@@ -154,7 +154,7 @@ The resulting knowledge model has two dimensions:
        symbols / calls / concepts    A -> B -> C
 ```
 
-WTH does not need to regenerate an entire repository wiki for every revision. It should
+Know the Map does not need to regenerate an entire repository wiki for every revision. It should
 prefer content-addressed structural state plus incremental semantic deltas where
 possible.
 
@@ -171,7 +171,7 @@ History enables questions that current-state code search cannot answer well:
 
 A PR is a semantic transition between two repository states, not merely a text diff.
 
-For a base revision and head revision, WTH should construct and compare repository
+For a base revision and head revision, Know the Map should construct and compare repository
 models, then explain the meaningful delta.
 
 ```text
@@ -357,7 +357,7 @@ A foundational PR often introduces types, interfaces, or abstractions whose purp
 visible only in later PRs. Reviewing each PR as an isolated diff forces the human to
 mentally predict the future stack.
 
-WTH should understand a stack as a **feature trajectory** while preserving the review
+Know the Map should understand a stack as a **feature trajectory** while preserving the review
 boundary of each individual PR.
 
 ```text
@@ -414,8 +414,9 @@ back to its evidence and indicate how it was obtained.
 
 ## Local-first privacy and security
 
-WTH should remain local-first even if the eventual product includes paid hosted services.
-Source code should not need to pass through WTH-operated infrastructure for core review.
+Know the Map should remain local-first even if the eventual product includes paid
+hosted services. Source code should not need to pass through Bleentr-operated
+infrastructure for core review.
 
 The local service may own:
 
@@ -505,7 +506,7 @@ Early usage should answer:
 
 ## Product framing
 
-WTH consists of two tightly connected capabilities:
+Know the Map consists of two tightly connected capabilities:
 
 **Repository intelligence**
 
@@ -527,12 +528,15 @@ That is the source-of-truth principle for future product and architecture decisi
 
 ## Naming
 
-- Product: **What the Hunk?**
-- Binary and command prefix: `wth`
+- Product: **Know the Map by Bleentr**
+- Short name: **Know the Map**
+- Binary and command prefix: `ktm`
 
 The name can be revisited later. Architecture and domain concepts should not depend on it.
 
 ## References
 
-- [Current architecture](./what-the-hunk-architecture.md)
-- [Current condensed overview and MVP](./what-the-hunk-overview.md)
+- [Proposed local wiki architecture](./docs/architecture/PROPOSED_ARCHITECTURE.md)
+- [Component interaction traces](./docs/architecture/INTERACTION_TRACES.md)
+- [Interfaces and module ownership](./docs/architecture/INTERFACES.md)
+- [Review UI options](./docs/design/UI_OPTIONS.md)

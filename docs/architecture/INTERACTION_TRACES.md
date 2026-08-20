@@ -1,4 +1,4 @@
-# What the Hunk? — Component Interaction Traces
+# Know the Map by Bleentr — Component Interaction Traces
 
 > **Status:** Companion proposal to
 > [`PROPOSED_ARCHITECTURE.md`](./PROPOSED_ARCHITECTURE.md).
@@ -32,7 +32,7 @@ but never a half-published wiki.
 
 ### User intent
 
-The user opens a local repository. WTH resolves its current source state but
+The user opens a local repository. Know the Map resolves its current source state but
 does not perform AI analysis yet.
 
 ### Call stack
@@ -52,7 +52,7 @@ ReviewApi.openRepository(request)
 
 ### Important behavior
 
-- `open` establishes the only filesystem root WTH may access.
+- `open` establishes the only filesystem root Know the Map may access.
 - `capture` returns the same `SnapshotId` for the same reproducible source
   state.
 - No model session starts automatically.
@@ -63,7 +63,7 @@ ReviewApi.openRepository(request)
 
 ### User intent
 
-The user asks WTH to map the repository and generate initial component pages.
+The user asks Know the Map to map the repository and generate initial component pages.
 
 ### Sequence
 
@@ -154,8 +154,8 @@ IntelligenceEngine.analyzeComponent(componentDraft, traversalState)
 
 ### Division of responsibility
 
-The model decides *how* to divide the component. WTH decides whether the plan is
-safe and affordable to execute.
+The model decides *how* to divide the component. Know the Map decides whether the
+plan is safe and affordable to execute.
 
 The agent cannot create unbounded work. When the recursion or cost budget is
 exhausted, the component is published as partial knowledge with an explicit
@@ -202,12 +202,12 @@ ReviewApi.ask(request)
       │     level = "brief"
       │   )
       └─ HarnessRuntime.execute(AnswerQuestionTask, knowledgeTools)
-         ├─ agent may call wth_load_component(componentId, "interpretations")
+         ├─ agent may call ktm_load_component(componentId, "interpretations")
          │  └─ KnowledgeBase.loadContext(...)
-         ├─ agent may call wth_read_evidence(anchorId)
+         ├─ agent may call ktm_read_evidence(anchorId)
          │  ├─ KnowledgeBase.getAnchor(anchorId)
          │  └─ RepositoryWorkspace.readAnchor(anchorId, snapshotId)
-         ├─ agent may call wth_search_knowledge(query)
+         ├─ agent may call ktm_search_knowledge(query)
          │  └─ KnowledgeBase.search(...)
          └─ stream AnswerEvent with EvidenceReference[]
 ```
@@ -440,9 +440,9 @@ IntelligenceEngine.executeTask(task)
    └─ LocalModelHarness.execute(task)   // possible future adapter
 ```
 
-All adapters receive WTH `AnalysisTask` values and emit WTH `HarnessEvent` and
-`AnalysisResult` values. Provider sessions, messages, tokens, and errors are
-translated inside the adapter.
+All adapters receive Know the Map `AnalysisTask` values and emit the product's
+`HarnessEvent` and `AnalysisResult` values. Provider sessions, messages, tokens,
+and errors are translated inside the adapter.
 
 This is the principal extensibility seam. Repository, knowledge, and review
 semantics do not change when the harness changes.

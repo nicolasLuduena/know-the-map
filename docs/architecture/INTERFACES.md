@@ -1,4 +1,4 @@
-# What the Hunk? — Proposed Interfaces and Module Ownership
+# Know the Map by Bleentr — Proposed Interfaces and Module Ownership
 
 > **Status:** Companion proposal to
 > [`PROPOSED_ARCHITECTURE.md`](./PROPOSED_ARCHITECTURE.md).
@@ -8,7 +8,7 @@
 
 ## Interface philosophy
 
-WTH should expose one substantial façade per deep module, not one service per
+Know the Map should expose one substantial façade per deep module, not one service per
 table or operation.
 
 ```text
@@ -699,8 +699,8 @@ budget, decomposition, or routing services.
 
 ### Responsibility
 
-Execute a WTH analysis task through a coding-agent harness while preserving
-WTH permissions, cancellation, streaming, and result schemas.
+Execute an analysis task through a coding-agent harness while preserving product
+permissions, cancellation, streaming, and result schemas.
 
 ```ts
 interface HarnessRuntime {
@@ -768,11 +768,11 @@ The Intelligence Engine constructs bounded tools backed by the existing deep
 modules:
 
 ```text
-wth_list_components    → KnowledgeBase.getComponentMap
-wth_load_component     → KnowledgeBase.loadContext
-wth_search_knowledge   → KnowledgeBase.search
-wth_read_code          → RepositoryWorkspace.read
-wth_read_evidence      → KnowledgeBase.getAnchor + RepositoryWorkspace.readAnchor
+ktm_list_components    → KnowledgeBase.getComponentMap
+ktm_load_component     → KnowledgeBase.loadContext
+ktm_search_knowledge   → KnowledgeBase.search
+ktm_read_code          → RepositoryWorkspace.read
+ktm_read_evidence      → KnowledgeBase.getAnchor + RepositoryWorkspace.readAnchor
 ```
 
 The tools expose only approved snapshots and repository-relative selections.
