@@ -61,12 +61,19 @@ provider account through interchangeable runners such as:
 
 ```text
 Know the Map
- ├─ OpenCode
+ ├─ Pi (initial embedded harness)
+ ├─ OpenCode (later adapter)
  ├─ Codex
  ├─ Claude Code
  ├─ local / self-hosted model
  └─ direct model API
 ```
+
+Pi is the MVP choice because its small embedded SDK lets Know the Map own the
+divide-and-conquer task graph while Pi handles bounded model sessions, tools,
+providers, and streaming. This is an integration choice, not a domain
+dependency: OpenCode remains a later adapter if its service model or broader
+agent runtime becomes useful.
 
 This separates product economics from inference economics. A small fixed subscription
 can pay for the product experience — indexing, history, storage, review workflow,

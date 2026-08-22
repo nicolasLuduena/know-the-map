@@ -21,7 +21,7 @@ HarnessRuntime
 ```
 
 `ApplicationServer` is the composition root. `IntelligenceEngine` orchestrates
-AI work but does not read Git, write SQL, or call OpenCode directly.
+AI work but does not read Git, write SQL, or call Pi directly.
 
 Long-running calls return `Stream`s. Effect interruption propagates from the
 client request through the engine to active harness sessions. Publications to
@@ -103,11 +103,13 @@ ReviewApi.indexRepository(request)
       ├─ RepositoryWorkspace.manifest(snapshotId, manifestPolicy)
       ├─ KnowledgeBase.beginAnalysisRun(metadata)
       ├─ HarnessRuntime.execute(DecomposeRepositoryTask)
-      │  └─ OpenCodeV2Harness
-      │     ├─ ensureService()
-      │     ├─ createSession(repositoryLocation)
+      │  └─ PiHarness
+      │     ├─ createModelRuntime(modelClass)
+      │     ├─ createResourceLoader(approvedResources)
+      │     ├─ createAgentSession(SessionManager.inMemory(), tools)
+      │     ├─ subscribe(normalizeEvent)
       │     ├─ prompt(structuredTask)
-      │     └─ streamEvents()
+      │     └─ decodeSubmittedResult(resultSchema)
       ├─ validate ComponentPlan
       ├─ analyzeComponent(component) for each leaf
       │  ├─ HarnessRuntime.execute(InterpretComponentTask)
@@ -402,7 +404,7 @@ WebClient cancels request or closes stream
 └─ ApplicationServer interrupts request fiber
    └─ IntelligenceEngine scope closes
       ├─ active HarnessRuntime.execute streams are interrupted
-      ├─ OpenCodeV2Harness interrupts active sessions
+      ├─ PiHarness aborts and disposes active sessions
       ├─ queued component tasks are discarded
       ├─ KnowledgeBase marks AnalysisRun as cancelled
       └─ no IndexPublication or ReviewDraft is published
@@ -435,9 +437,10 @@ type CoverageGap = {
 ```text
 IntelligenceEngine.executeTask(task)
 └─ HarnessRuntime.execute(task)
-   ├─ OpenCodeV2Harness.execute(task)   // first implementation
-   ├─ DirectApiHarness.execute(task)    // possible future adapter
-   └─ LocalModelHarness.execute(task)   // possible future adapter
+   ├─ PiHarness.execute(task)            // first implementation
+   ├─ OpenCodeV2Harness.execute(task)    // possible future adapter
+   ├─ DirectApiHarness.execute(task)     // possible future adapter
+   └─ LocalModelHarness.execute(task)    // possible future adapter
 ```
 
 All adapters receive Know the Map `AnalysisTask` values and emit the product's

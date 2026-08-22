@@ -30,7 +30,7 @@ The interfaces hide decisions that callers should not need to understand:
   wiki-version assembly.
 - `IntelligenceEngine` hides task graphs, prompts, recursive agents, routing,
   budgets, and synthesis.
-- `HarnessRuntime` hides OpenCode sessions, providers, model messages, and
+- `HarnessRuntime` hides Pi sessions, providers, model messages, and
   permissions.
 - `ReviewApi` hides application composition and transport.
 
@@ -790,13 +790,13 @@ type HarnessEvent<Result> =
   | { kind: "result"; value: Result }
 ```
 
-### OpenCodeV2Harness
+### PiHarness
 
-`OpenCodeV2Harness` is the first implementation. Its private responsibilities
+`PiHarness` is the first implementation. Its private responsibilities
 are approximately:
 
 ```ts
-class OpenCodeV2Harness implements HarnessRuntime {
+class PiHarness implements HarnessRuntime {
   capabilities(): Effect.Effect<HarnessCapabilities, HarnessError>
 
   execute<Result extends AnalysisResult>(
@@ -805,16 +805,19 @@ class OpenCodeV2Harness implements HarnessRuntime {
   ): Stream.Stream<HarnessEvent<Result>, HarnessError>
 
   // Private implementation details:
-  private ensureService(): Effect.Effect<OpenCodeEndpoint, HarnessError>
-  private createTaskSession(...): Effect.Effect<OpenCodeSession, HarnessError>
-  private configureTaskAgent(...): Effect.Effect<void, HarnessError>
-  private bridgeTools(...): Effect.Effect<void, HarnessError>
-  private decodeResult(...): Effect.Effect<Result, HarnessError>
+  private createModelRuntime(...): Effect.Effect<ModelRuntime, HarnessError>
+  private createResourceLoader(...): Effect.Effect<ResourceLoader, HarnessError>
+  private createTaskSession(...): Effect.Effect<AgentSession, HarnessError>
+  private defineTaskTools(...): ReadonlyArray<AgentTool>
+  private decodeSubmittedResult(...): Effect.Effect<Result, HarnessError>
 }
 ```
 
-Effect interruption of `execute` must interrupt the OpenCode session. OpenCode
-client values and errors are translated before leaving this class.
+Each execution uses `SessionManager.inMemory()` so analysis conversations do not
+become an accidental persistence layer. The Effect scope subscribes to Pi events,
+calls `session.abort()` when interrupted, and always calls `session.dispose()`.
+Pi values, provider errors, and Promise-based lifecycle details are translated
+before leaving this class.
 
 ## 5. ReviewStrategy
 
@@ -956,18 +959,18 @@ type IntelligenceError =
 ```
 
 `ApplicationServer` maps them into versioned `ApiError` values. Raw Git,
-SQLite, OpenCode, provider, and HTTP errors do not cross their owning module.
+SQLite, Pi, provider, and HTTP errors do not cross their owning module.
 
 ## Ownership matrix
 
 | Concern | Owner | Explicitly not owned by |
 | --- | --- | --- |
 | Git and filesystem | Repository Workspace | agents, UI, Knowledge Base |
-| Snapshot identity | Repository Workspace | OpenCode, database schema |
+| Snapshot identity | Repository Workspace | Pi, database schema |
 | Anchor verification | Repository Workspace | model output |
 | Components and interpretations | Knowledge Base | UI, harness |
 | Freshness rules | Knowledge Base | model, UI |
-| Recursive task graph | Intelligence Engine | planner agent, OpenCode |
+| Recursive task graph | Intelligence Engine | planner agent, Pi |
 | Prompt and context assembly | Intelligence Engine | UI |
 | Model sessions and tools | Harness Runtime | domain modules |
 | Human decisions | Knowledge Base | AI task |
@@ -1002,7 +1005,7 @@ The proposal intentionally does **not** define separate public services for:
 - routing;
 - budgets;
 - scheduling;
-- OpenCode sessions;
+- Pi sessions;
 - SQLite repositories per table.
 
 Those are cohesive implementation details inside the deep modules. They should

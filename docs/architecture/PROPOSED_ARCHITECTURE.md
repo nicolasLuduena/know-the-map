@@ -41,10 +41,11 @@ human accepts, corrects, or rejects proposed knowledge
 Wiki at head revision
 ```
 
-OpenCode V2 is the first execution harness. Know the Map owns repository
-snapshots, knowledge, decomposition, task orchestration, freshness, and user
-decisions. OpenCode owns model sessions, tools, subagents, provider selection,
-and streamed execution.
+Pi is the first execution harness. Know the Map owns repository snapshots,
+knowledge, decomposition, the recursive task graph, freshness, and user
+decisions. Pi owns each bounded model session, tool execution, provider and
+model selection, and streamed execution. OpenCode remains a possible later
+adapter once the product needs its broader service-oriented runtime.
 
 ## Design principles
 
@@ -86,7 +87,7 @@ permissions, cancellation, retries, and result validation.
 ### Prefer deep modules
 
 Know the Map should have a few modules that each hide meaningful complexity. Storage
-tables, Git commands, prompt fragments, OpenCode sessions, and HTTP endpoints
+tables, Git commands, prompt fragments, Pi sessions, and HTTP endpoints
 are implementation details behind those modules rather than packages of their
 own.
 
@@ -106,7 +107,7 @@ flowchart TD
     KNOW["Knowledge base"]
     INTEL["Intelligence engine"]
     HARNESS["Harness runtime"]
-    OC["OpenCode V2"]
+    PI["Pi SDK"]
     GIT["Git + working tree"]
     DB["SQLite + captured blobs"]
 
@@ -117,7 +118,7 @@ flowchart TD
     INTEL --> REPO
     INTEL --> KNOW
     INTEL --> HARNESS
-    HARNESS --> OC
+    HARNESS --> PI
     REPO --> GIT
     KNOW --> DB
 ```
@@ -186,15 +187,16 @@ need for a separately deployable worker system.
 
 It owns:
 
-- starting or attaching to a harness service;
-- creating and interrupting task sessions;
+- creating, interrupting, and disposing task sessions;
 - configuring models, agents, and read-only permissions;
 - streaming normalized execution events;
 - collecting and validating structured task results;
 - translating provider and harness failures into domain errors.
 
-The first adapter is `OpenCodeV2Harness`, using the public V2 server/client
-boundary. The not-yet-public embedded SDK can replace its internals later.
+The first adapter is `PiHarness`, embedded through Pi's public TypeScript SDK.
+It creates one in-memory session per `AnalysisTask`; Pi does not become a second
+orchestrator. `IntelligenceEngine` remains responsible for decomposition,
+fan-out, recursion limits, concurrency, and publication.
 
 ### 5. Application Server
 
@@ -399,10 +401,12 @@ Question routing starts with Level 0. The answering task loads deeper levels
 only for likely components. Large component trees are hierarchical: loading a
 parent reveals its child descriptors.
 
-OpenCode V2 skills are a promising delivery mechanism because their descriptions
-can be advertised separately from their bodies. Know the Map may initially
-implement the same behavior through explicit knowledge tools, then expose dynamic
-native skills when that integration is stable.
+Pi skills support the same progressive-disclosure shape: descriptions can be
+advertised before their full instructions are loaded. The MVP should use a small
+explicit resource set plus bounded `ktm_*` tools, rather than generating one skill
+per component. Component descriptors and briefs remain product data loaded through
+those tools. Repository-specific skills can be enabled later through a restricted
+resource loader.
 
 ## Semantic code review
 
@@ -446,41 +450,47 @@ This is deliberately not a general event-sourcing system. Interpretations and
 human decisions are append-only where auditability matters; query state is
 materialized directly in SQLite.
 
-## OpenCode V2 integration
+## Pi integration
 
-The initial integration uses the public OpenCode V2 service and generated
-TypeScript client:
+The initial integration embeds Pi's public TypeScript SDK in the Harness Runtime:
 
 ```text
-OpenCodeV2Harness.execute(task, context)
-  → ensure or attach to service internally
-  → create session at repository location
-  → configure task agent and read-only permissions
+PiHarness.execute(task, context)
+  → resolve the configured provider and model through ModelRuntime
+  → create one AgentSession with SessionManager.inMemory()
+  → load only explicitly approved resources and instructions
+  → disable unneeded built-in tools and register bounded ktm_* tools
   → prompt with the `AnalysisTask` envelope
-  → stream normalized events
-  → receive structured result
+  → translate AgentSession events into HarnessEvent values
+  → receive the result through a schema-specific submission tool
   → validate anchors and result schema
+  → abort on interruption and always dispose the session
 ```
 
-Know the Map defines the task/result schemas. OpenCode session, message, tool, and model
-types must not leak into the domain modules.
+Know the Map defines task/result schemas and exposes a submission tool appropriate
+to the task, such as `ktm_submit_component_plan` or
+`ktm_submit_component_analysis`. Pi session, message, tool, and model types must
+not leak into domain modules.
 
-Agents used for indexing and review deny edits. Shell access is denied by
-default or restricted to explicitly allowed read-only commands. Know the Map supplies
-repository and knowledge access through bounded tools.
+Background indexing and review sessions do not automatically discover global or
+repository configuration. They receive an explicit `ResourceLoader`, no write or
+edit tools, and no shell by default. Know the Map supplies repository and knowledge
+access through bounded tools. A future interactive mode may deliberately enable a
+wider Pi tool set under a separate permission policy.
 
 References:
 
-- [OpenCode V2 client](https://opencode.ai/v2/docs/build/client)
-- [OpenCode V2 SDK](https://opencode.ai/v2/docs/build/sdk)
-- [OpenCode V2 permissions](https://opencode.ai/v2/docs/permissions)
-- [OpenCode V2 skills](https://opencode.ai/v2/docs/skills)
+- [Pi documentation](https://pi.dev/docs/latest)
+- [Pi SDK](https://pi.dev/docs/latest/sdk)
+- [Pi skills](https://pi.dev/docs/latest/skills)
+- [Pi providers](https://pi.dev/docs/latest/providers)
+- [Pi local models](https://pi.dev/docs/latest/models)
 
 ## Extensibility model
 
 The initial stable seams are:
 
-1. **Harness adapters** — OpenCode V2 first; other agent runtimes later.
+1. **Harness adapters** — Pi first; OpenCode V2 and other runtimes later.
 2. **Review strategies** — general, security, performance, or
    repository-specific interpretation guidance.
 3. **Knowledge persistence** — SQLite first, replaceable behind one deep
@@ -510,7 +520,7 @@ The first useful release should support:
 
 1. Open one local Git repository.
 2. Capture a committed or dirty-worktree snapshot.
-3. Produce a recursive component map through OpenCode V2.
+3. Produce a recursive component map through Pi-backed analysis tasks.
 4. Generate component briefs and anchored interpretation cards.
 5. Browse the local wiki and exact supporting code.
 6. Ask questions using progressive component loading.
