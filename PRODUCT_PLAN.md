@@ -19,15 +19,21 @@ means.
 The irreducible product is one loop:
 
 1. Capture hard evidence from a reproducible code snapshot.
-2. Record a human or AI interpretation separately from that evidence.
-3. Bind the interpretation to the exact evidence and code scope supporting it.
-4. Detect when the supporting code changes.
-5. Reduce the interpretation's freshness until it is revalidated.
-6. Let a person inspect, correct, dismiss, accept, or supersede it.
+2. Recursively identify components until each leaf is a coherent unit that can be
+   explored well.
+3. Explore every leaf—or record an explicit coverage gap—to gather evidence across
+   the repository.
+4. Record a human or AI interpretation separately from that evidence.
+5. Bind the interpretation to the exact evidence and code scope supporting it.
+6. Detect when the supporting code changes.
+7. Reduce the interpretation's freshness until it is revalidated.
+8. Let a person inspect, correct, dismiss, accept, or supersede it.
 
 ```text
 Code at snapshot A
-  ↓ capture facts
+  ↓ recursively divide into coherent components
+Leaf-component exploration
+  ↓ capture facts across the repository
 Evidence
   ↓ explain what those facts mean
 Interpretations bound to evidence
@@ -70,7 +76,8 @@ into proof.
 
 ### Capabilities are loaded by intent
 
-Only evidence tracking, interpretation binding, and freshness are always active.
+Component discovery and exploration, evidence tracking, interpretation binding, and
+freshness are always active.
 Optional capabilities advertise a compact description and load their prompts,
 tools, context, and tasks only when the user requests them or explicitly enables
 them in a review policy.
@@ -81,10 +88,10 @@ do not automatically enable that capability later.
 
 ```text
 always active
-  evidence ↔ interpretation ↔ freshness
+  component exploration → evidence ↔ interpretation ↔ freshness
 
 available on demand
-  component map · PR synthesis · Q&A · flow tracing · test gaps · review lenses
+  visual map · PR synthesis · Q&A · flow tracing · test gaps · review lenses
 ```
 
 ### Humans control durable knowledge
@@ -114,22 +121,26 @@ but that expansion is outside the MVP.
 The first product is one narrow end-to-end slice:
 
 1. Open one repository at a reproducible baseline snapshot.
-2. Capture code evidence with stable, verifiable anchors.
-3. Create human and AI interpretations bound to that evidence.
-4. Change the code and identify affected interpretations.
-5. Show why their freshness changed.
-6. Let a person confirm, correct, dismiss, or supersede them.
+2. Recursively divide it into components until each leaf is coherent and bounded
+   enough to explore.
+3. Explore the leaves and account for repository coverage.
+4. Capture code evidence with stable, verifiable anchors.
+5. Create human and AI interpretations bound to that evidence.
+6. Change the code and identify affected interpretations.
+7. Show why their freshness changed.
+8. Let a person confirm, correct, dismiss, or supersede them.
 
-No component graph, chat interface, semantic PR summary, flow analysis, test-gap
-check, model router, or elaborate visualization is required to validate this
-loop.
+A recursive component hierarchy is required because it is the exploration strategy.
+A polished component-map UI, chat interface, semantic PR summary, flow analysis,
+test-gap check, model router, or elaborate visualization is not required to validate
+the loop.
 
 ## Candidate capabilities
 
 Everything beyond the kernel is optional and demand-loaded. Current candidates
 include:
 
-- repository component maps and briefs;
+- rich component maps and browsable briefs beyond the core exploration view;
 - questions answered from progressively loaded repository knowledge;
 - semantic base/head PR review;
 - test protection and core-flow gap analysis;
