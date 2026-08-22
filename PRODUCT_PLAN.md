@@ -201,6 +201,4 @@ That is the source-of-truth principle for product and architecture decisions.
 
 - [Optional capability backlog](https://github.com/nicolasLuduena/know-the-map/issues/22)
 - [Proposed architecture](./docs/architecture/PROPOSED_ARCHITECTURE.md)
-- [Component interaction traces](./docs/architecture/INTERACTION_TRACES.md)
-- [Interfaces and module ownership](./docs/architecture/INTERFACES.md)
 - [Review UI options](./docs/design/UI_OPTIONS.md)

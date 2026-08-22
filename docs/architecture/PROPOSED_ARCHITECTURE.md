@@ -1,14 +1,13 @@
 # Know the Map — Proposed Architecture
 
-> **Status:** Proposal for discussion.
+> **Status:** Core architecture direction. Implementation-level contracts are
+> defined and revised in code as the system is built.
 >
 > [`PRODUCT_PLAN.md`](../../PRODUCT_PLAN.md) defines product scope. This document
 > explains only the system structure needed to implement its core loop.
 
-Companion material:
+Optional product work is kept outside this definitive architecture:
 
-- [`INTERACTION_TRACES.md`](./INTERACTION_TRACES.md) follows operations call by call.
-- [`INTERFACES.md`](./INTERFACES.md) contains detailed TypeScript/Effect contracts.
 - [GitHub issue #22](https://github.com/nicolasLuduena/know-the-map/issues/22)
   tracks optional product capabilities.
 
@@ -278,8 +277,9 @@ The architecture requires only these concepts:
 - **Human decision:** acceptance, correction, dismissal, or supersession of an
   interpretation.
 
-Exact identifiers, schemas, and Effect contracts belong in
-[`INTERFACES.md`](./INTERFACES.md), not in this architecture overview.
+Exact identifiers, schemas, and Effect contracts are implementation decisions. They
+should be introduced alongside working code rather than maintained as a speculative
+parallel specification.
 
 ## Baseline indexing interaction
 

@@ -9,7 +9,5 @@ changes easier to understand and review.
 
 - [Product plan](./PRODUCT_PLAN.md) — approved product thesis and scope
 - [Proposed local wiki architecture](./docs/architecture/PROPOSED_ARCHITECTURE.md)
-- [Component interaction traces](./docs/architecture/INTERACTION_TRACES.md)
-- [Interfaces and module ownership](./docs/architecture/INTERFACES.md)
 - [Review UI options](./docs/design/UI_OPTIONS.md)
 - [Product design context](./PRODUCT.md)
