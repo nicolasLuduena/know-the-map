@@ -449,3 +449,57 @@ and errors are translated inside the adapter.
 
 This is the principal extensibility seam. Repository, knowledge, and review
 semantics do not change when the harness changes.
+
+## Trace 10: Discover flows, then trace one on demand
+
+Opening the Flow Explorer computes only compact descriptors:
+
+```text
+WebClient.openFlowExplorer(snapshotId)
+└─ ReviewApi.explore({ kind: "discover-flows", snapshotId })
+   └─ IntelligenceEngine.explore(request)
+      ├─ assert capability was explicitly requested
+      ├─ KnowledgeBase.loadContext(snapshotId, level = "brief")
+      ├─ RepositoryWorkspace.manifest(snapshotId, entryPointsAndMessagingOnly)
+      ├─ HarnessRuntime.execute(DiscoverFlowsTask)
+      ├─ validate FlowDescriptor[]
+      └─ KnowledgeBase.saveFlowCatalog(snapshotId, descriptors)
+```
+
+If 25 flows are discovered, the UI renders 25 descriptors. It does not schedule 25
+trace tasks. Selecting one flow starts the expensive pass:
+
+```text
+WebClient.selectFlow(flowId)
+└─ ReviewApi.explore({ kind: "trace-flow", snapshotId, flowId })
+   └─ IntelligenceEngine.explore(request)
+      ├─ KnowledgeBase.getFlowDescriptor(flowId)
+      ├─ KnowledgeBase.loadContext(likelyComponentIds, level = "brief")
+      ├─ HarnessRuntime.execute(TraceFlowTask, boundedKnowledgeTools)
+      │  ├─ ktm_read_code(entryPoint)
+      │  ├─ ktm_read_code(calledSymbols)
+      │  ├─ ktm_read_code(messageProducersAndConsumers)
+      │  └─ ktm_submit_flow_trace(steps)
+      ├─ RepositoryWorkspace.verifyAnchors(snapshotId, trace.anchors)
+      └─ KnowledgeBase.saveFlowTrace(flowId, snapshotId, trace)
+```
+
+An example result across service boundaries:
+
+```text
+POST /login
+└─ ApiGateway.forward(request)
+   │  credentials → LoginCommand
+   └─ HTTP → AuthService.authenticate(command)
+      │  LoginCommand → authenticated User
+      ├─ RPC → TokenService.issue(user)
+      │  └─ User → signed access claims
+      ├─ SessionStore.save(session)
+      │  └─ no session → active session
+      └─ publish UserLoggedIn
+         └─ Session → redacted audit event
+```
+
+Calls, RPCs, events, persistence, and transformations are distinct step kinds. Missing
+links remain visibly inferred. The saved trace follows the same anchor freshness rules
+as every other interpretation.

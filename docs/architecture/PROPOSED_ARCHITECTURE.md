@@ -84,6 +84,18 @@ The planning model may decide that a component needs subdivision, but Know the M
 the bounded task graph. It enforces recursion depth, concurrency, cost limits,
 permissions, cancellation, retries, and result validation.
 
+### Capabilities are loaded on demand
+
+The evidence-to-interpretation freshness loop is always available. Expensive analyses
+such as repository-wide decomposition, test-gap detection, or specialized review lenses
+remain dormant until the user requests them or enables them in an explicit policy.
+
+The Intelligence Engine keeps a compact internal capability catalog containing each
+feature's description, required inputs, and cost class. Only an activated capability
+loads its instructions, tools, context, and task graph. A model cannot activate another
+capability merely because it may be useful. This is an internal policy of the deep
+Intelligence Engine, not a new collection of small public services.
+
 ### Prefer deep modules
 
 Know the Map should have a few modules that each hide meaningful complexity. Storage
@@ -172,6 +184,7 @@ It owns:
 - per-component interpretation tasks;
 - component routing for user questions;
 - progressive context loading;
+- demand-driven capability activation;
 - interpretation revalidation after code changes;
 - semantic base/head review;
 - cross-component synthesis;
@@ -407,6 +420,34 @@ explicit resource set plus bounded `ktm_*` tools, rather than generating one ski
 per component. Component descriptors and briefs remain product data loaded through
 those tools. Repository-specific skills can be enabled later through a restricted
 resource loader.
+
+## On-demand flow exploration
+
+Flow exploration uses two activation levels so listing possible flows does not incur
+the cost of tracing every one:
+
+```text
+Flow Explorer opened
+  → discover-flows task
+  → FlowDescriptor[]
+       id, name, trigger, outcome, likely components, assurance, estimated trace cost
+
+Flow selected
+  → trace-flow task for one FlowId
+  → FlowTrace
+       ordered calls, events, boundaries, state changes, transformations, anchors
+```
+
+The discovery task works from component briefs, entry points, routes, handlers, and
+messaging metadata. It returns hypotheses, not complete traces. The trace task receives
+only the selected descriptor and progressively reads relevant code through bounded
+tools. In a microservices repository it represents HTTP/RPC, queues, topics, consumers,
+and database boundaries explicitly.
+
+Each `FlowStep` records its kind, component, operation, input shape, output or mutation,
+and evidence anchors. Links that cannot be established deterministically retain inferred
+assurance. Both descriptors and traces are stored as interpretations scoped to a
+snapshot, so normal freshness rules invalidate them when supporting code changes.
 
 ## Semantic code review
 

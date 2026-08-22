@@ -54,6 +54,7 @@ type InterpretationChangeId = string & Brand<"InterpretationChangeId">
 type ReviewDraftId = string & Brand<"ReviewDraftId">
 type AnalysisRunId = string & Brand<"AnalysisRunId">
 type AnalysisTaskId = string & Brand<"AnalysisTaskId">
+type FlowId = string & Brand<"FlowId">
 type Hash = string & Brand<"Hash">
 type RepoPath = string & Brand<"RepoPath">
 ```
@@ -577,10 +578,16 @@ interface IntelligenceEngine {
   review(
     request: ReviewRequest,
   ): Stream.Stream<ReviewEvent, IntelligenceError>
+
+  explore(
+    request: ExplorationRequest,
+  ): Stream.Stream<ExplorationEvent, IntelligenceError>
 }
 ```
 
-Only four public methods are required. The complexity stays behind them.
+Only one public entry point is added for all demand-loaded, structured explorations;
+each optional feature does not become its own service. The complexity stays behind
+the Intelligence Engine.
 
 ### `index`
 
@@ -640,6 +647,80 @@ type AnswerEvent =
   | { kind: "text-delta"; text: string }
   | { kind: "evidence"; anchor: CodeAnchor }
   | { kind: "completed"; answer: Answer }
+```
+
+### `explore`
+
+Runs an explicitly requested optional capability. Flow discovery and tracing are
+separate requests so the first pass cannot accidentally expand every flow.
+
+```ts
+type ExplorationRequest =
+  | {
+      kind: "discover-flows"
+      repositoryId: RepositoryId
+      snapshotId: SnapshotId
+      policy: AnalysisPolicy
+    }
+  | {
+      kind: "trace-flow"
+      repositoryId: RepositoryId
+      snapshotId: SnapshotId
+      flowId: FlowId
+      policy: AnalysisPolicy
+    }
+
+type Assurance = "observed" | "inferred" | "unverified"
+
+type FlowData = {
+  name: string
+  shape: string
+  redactedExample?: unknown
+}
+
+type StateTransition = {
+  subject: string
+  before: string
+  after: string
+}
+
+type FlowDescriptor = {
+  id: FlowId
+  name: string
+  trigger: string
+  outcome: string
+  likelyComponentIds: ReadonlyArray<ComponentId>
+  assurance: Assurance
+  estimatedTraceCost: "low" | "medium" | "high"
+}
+
+type FlowStep = {
+  order: number
+  kind: "call" | "rpc" | "event" | "queue" | "read" | "write" | "transform"
+  componentId: ComponentId
+  targetComponentId?: ComponentId
+  operation: string
+  input?: FlowData
+  output?: FlowData
+  mutation?: StateTransition
+  evidenceAnchorIds: ReadonlyArray<CodeAnchorId>
+  assurance: Assurance
+}
+
+type FlowTrace = {
+  flowId: FlowId
+  snapshotId: SnapshotId
+  steps: ReadonlyArray<FlowStep>
+}
+
+type FlowCatalogDraft = { flows: ReadonlyArray<FlowDescriptor> }
+type FlowTraceDraft = FlowTrace
+
+type ExplorationEvent =
+  | { kind: "status"; message: string }
+  | { kind: "flow-discovered"; flow: FlowDescriptor }
+  | { kind: "flow-step"; step: FlowStep }
+  | { kind: "completed"; result: ReadonlyArray<FlowDescriptor> | FlowTrace }
 ```
 
 ### `review`
@@ -724,6 +805,8 @@ type AnalysisTask<Result extends AnalysisResult = AnalysisResult> = {
     | "interpret-component"
     | "route-question"
     | "answer-question"
+    | "discover-flows"
+    | "trace-flow"
     | "revalidate-component"
     | "synthesize-cross-component"
   repositoryId: RepositoryId
@@ -741,6 +824,8 @@ type AnalysisResult =
   | ComponentAnalysisDraft
   | QuestionRoute
   | Answer
+  | FlowCatalogDraft
+  | FlowTraceDraft
   | ComponentReviewDraft
   | CrossComponentReviewDraft
 ```

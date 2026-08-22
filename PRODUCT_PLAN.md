@@ -9,14 +9,12 @@
 
 Know the Map should be a **human-first repository and change intelligence system**.
 
-The product is not primarily an AI reviewer and it is no longer centered on individual
-hunks as the top-level abstraction. Its job is to reduce the amount of system state a
+The product is a human-first repository and change intelligence system centered on
+repository and change models rather than individual hunks.. Its job is to reduce the amount of system state a
 human reviewer must reconstruct mentally when reviewing large, unfamiliar, or
 agent-generated changes.
 
-A DeepWiki-like repository view is one surface over a persistent repository model. PR
-review consumes that model to explain a transition:
-
+PR review consumes a persistent repository model to explain a transition:
 > What was this system, what does this change alter, what does it become, and what
 > should a human verify before approving it?
 
@@ -24,34 +22,84 @@ The product succeeds when a reviewer can understand a change as a set of navigab
 architectural and behavioral decisions, trace claims back to code evidence, and know
 which questions remain unanswered.
 
-## Product model
+## Product kernel
 
-Know the Map has three primary layers:
+The plan describes many possible applications, but they are not all product
+requirements. The irreducible core is the relationship between **evidence** and
+**interpretation**:
 
-1. **Harness / execution** — how analysis is performed and who pays for inference.
-2. **Repository intelligence** — a persistent structural and semantic model of the codebase.
-3. **Change intelligence** — a temporal, semantic model of how a PR or stack transforms the repository.
+1. Capture hard evidence from a specific repository snapshot.
+2. Record a human or AI interpretation without presenting it as code truth.
+3. Bind that interpretation to the exact evidence and code scope that support it.
+4. Detect when the supporting code changes and reduce the interpretation's freshness
+   or weight until it is revalidated.
+5. Present evidence, interpretation, provenance, and uncertainty clearly enough for a
+   person to inspect and correct them.
 
-PR review is the interaction built on top of these layers.
+If Know the Map can complete that loop reliably, it has a useful first product.
+Component maps, semantic PR summaries, repository Q&A, uncovered-flow detection,
+specialized review lenses, and richer visualizations are applications of the kernel.
+They should be added only when they make the core loop more useful; none is required
+merely because it appears in this plan.
+
+## Demand-driven capabilities
+
+Optional features should be **lazy-loaded by intent**, not run on every repository or
+review. Each capability advertises a short description and expected inputs. Its prompts, tools, context, and analysis tasks are loaded only after the user requests it or explicitly enables it in a review policy.
+
+The system must not infer that an expensive feature is wanted merely because it might
+produce an interesting result. For example, core-flow test-gap analysis is disabled by
+default. It runs when the user asks a question such as “Which core flows are untested?”
+or turns that check on for the current review.
 
 ```text
-                 Repository intelligence
-                 "What is this system?"
-                          │
-                          ▼
-                    Temporal model
-                "How did it get here?"
-                          │
-                          ▼
-                    Change analysis
-               "What does this alter?"
-                          │
-                          ▼
-                       Review
-                "Should I approve it?"
+always active
+  evidence ↔ interpretation ↔ code freshness
+
+available on demand
+  component map · PR synthesis · repository Q&A · test-gap analysis · review lenses
+                        ↓ explicit request or policy
+                  load capability and run tasks
 ```
 
-## Harness / execution layer
+This keeps token use proportional to the user's immediate goal. Capability results may
+be cached against their evidence snapshot, but being cached does not make a capability
+automatically active on later reviews.
+
+## How the product works
+
+Know the Map is one loop, not a stack of product layers:
+
+```text
+Code at snapshot A
+  ↓ capture facts
+Evidence
+  ↓ human or AI explains what those facts mean
+Interpretations bound to evidence
+  ↓ code changes
+Code at snapshot B
+  ↓ compare the supporting anchors
+Freshness evaluation
+  ↓
+current interpretations · interpretations needing review · orphaned interpretations
+```
+
+The important transition is not “How did the repository get here?” It is:
+
+> What changed since this interpretation was created, and might it no longer hold?
+
+Know the Map begins at a user-selected baseline snapshot. It creates the initial
+evidence and interpretations there, then tracks their relationship to code forward as
+new snapshots are reviewed. It does not need to reconstruct the repository commit by
+commit from its origin. Earlier history may be inspected on demand, but it is neither a
+prerequisite nor part of the core loop.
+
+PR review, repository Q&A, component maps, flow exploration, and other experiences
+consume this same loop when explicitly activated. The harness runs requested analysis,
+the Knowledge Base stores the result, and the UI presents it; those are supporting
+parts of the implementation rather than separate product layers.
+
+## Harness / execution
 
 The harness is a first-class replaceable capability. Know the Map should not
 require users to buy inference from Bleentr for every model invocation.
@@ -72,8 +120,7 @@ Know the Map
 Pi is the MVP choice because its small embedded SDK lets Know the Map own the
 divide-and-conquer task graph while Pi handles bounded model sessions, tools,
 providers, and streaming. This is an integration choice, not a domain
-dependency: OpenCode remains a later adapter if its service model or broader
-agent runtime becomes useful.
+dependency: The initial Pi integration may later be complemented by adapters for other harnesses as their service models or broader agent runtimes become useful.
 
 This separates product economics from inference economics. A small fixed subscription
 can pay for the product experience — indexing, history, storage, review workflow,
@@ -85,8 +132,12 @@ Different harnesses may expose different capabilities, permissions, context limi
 streaming semantics, or tools; Know the Map should normalize those differences behind
 a common review-task boundary where practical.
 
-Direct API integration remains useful, but it should be an adapter rather than the
-architectural center.
+Direct API integration would effectively turn Know the Map into its own native
+harness. That could enable tighter orchestration, product-specific capabilities,
+new forms of analysis, and potentially better results than a general-purpose
+harness. It would also make Know the Map responsible for the complete agent
+runtime. The architecture should preserve this expansion path, but implementing
+it is explicitly outside the MVP.
 
 ## Repository intelligence
 
@@ -100,7 +151,8 @@ The repository model should include, as available:
 - definitions, references, callers, and callees;
 - control and data-flow relationships where they can be derived reliably;
 - entry points and important abstractions;
-- tests and the behavior they protect;
+- tests and the core flows or behaviors they protect;
+- important flows with no identified protecting test;
 - architectural boundaries;
 - diagnostics;
 - known invariants and assumptions;
@@ -110,6 +162,57 @@ This model should be assembled from deterministic evidence first: Git, ASTs, lan
 servers, static analysis, build metadata, tests, and other analyzers. Models add semantic
 interpretation where deterministic tools cannot answer the question economically or
 reliably.
+
+### Core-flow test gaps
+
+Know the Map should answer: **Which important user or system flow has no identified
+test protecting it?** It should rank core flows, connect each flow to tests through
+deterministic evidence where possible, and surface missing or weakened protection as
+a review question. This capability is disabled by default and runs only after an
+explicit user request or opt-in review policy.
+
+This is behavioral coverage, not a replacement for line or branch coverage. Failure
+to find a protecting test is evidence of a coverage gap, but not proof that no test
+exists; indirect, generated, or external tests may be invisible. The UI should show
+the supporting search and label uncertain mappings as interpretations.
+
+### On-demand flow explorer
+
+Cross-service data-flow analysis is another expensive capability and is disabled by
+default. It has two deliberately separate stages:
+
+1. **Discover flows.** When the user opens the Flow Explorer, run a bounded, relatively
+   cheap pass that returns compact flow descriptors: name, trigger, outcome, likely
+   components or services, and assurance. A repository might expose 25 such flows.
+2. **Trace one flow.** Only after the user selects a descriptor does the system inspect
+   the relevant code and compute an ordered trace of function calls, messages, events,
+   reads, writes, and data transformations.
+
+A detailed trace should cross process boundaries without pretending they are ordinary
+function calls. It should distinguish synchronous calls, RPC requests, published and
+consumed events, queue boundaries, database operations, and inferred links. Every step
+should identify its input, output or mutation, and supporting evidence where available.
+
+For example:
+
+```text
+“User signs in”
+POST /login
+  → ApiGateway.forward(request)
+      data: credentials → LoginCommand
+  → AuthService.authenticate(command)
+      data: LoginCommand → authenticated User
+  → TokenService.issue(user)
+      data: User → signed access claims
+  → SessionStore.save(session)
+      state: no session → active session
+  → UserLoggedIn published
+      data: Session → redacted audit event
+```
+
+The flow catalog and detailed traces are interpretations tied to their supporting code.
+They lose freshness when those anchors or service relationships change. Discovering the
+catalog must not automatically compute all 25 traces.
 
 The UI may present this model as a DeepWiki-like navigable repository:
 
@@ -463,25 +566,19 @@ domain model, not Monaco, Neovim, a TUI, or any particular harness.
 
 ## Near-term MVP
 
-The first implementation should validate semantic change review before attempting the
-complete long-term product.
+The required MVP is one narrow end-to-end slice of the product kernel:
 
-1. **One repository, one PR.** Resolve a base and head commit reliably.
-2. **Persistent structural graph.** Build useful repository structure from Git plus
-   TypeScript AST/LSP evidence.
-3. **Two semantic states.** Represent the base and PR head as repository states.
-4. **Semantic delta.** Identify changed symbols, relationships, boundaries, and flows.
-5. **Change classification.** Distinguish trivial, behavioral, architectural, and
-   critical areas.
-6. **Targeted questions.** Generate review questions appropriate to each change type.
-7. **Harness routing.** Use a fast/cheap model for simple work and a stronger model for
-   complex analysis, behind an explicit harness abstraction.
-8. **DeepWiki-like review UI.** Navigate overview, architecture, changes, questions,
-   evidence, and exact code.
-9. **Traceability.** Every important generated claim links back to deterministic evidence
-   or is labeled as inference/hypothesis.
-10. **Stack awareness later.** Add multi-PR feature trajectories only after single-PR
-    semantic transitions are genuinely useful.
+1. Open one repository and identify a reproducible code snapshot.
+2. Capture code evidence with stable, verifiable anchors.
+3. Create human and AI interpretations bound to that evidence.
+4. Change the code and mark affected interpretations as needing revalidation.
+5. Show the relationship and let a person confirm, correct, dismiss, or supersede the
+   interpretation.
+
+Everything beyond that is a candidate extension, not an MVP acceptance criterion. Early
+experiments may include a component map, base/head PR comparison, semantic change
+classification, targeted review questions, core-flow test-gap detection, model routing,
+or a DeepWiki-like browsing surface. Stack-aware feature trajectories remain later work.
 
 The MVP should optimize for learning whether this representation makes a human materially
 faster and more confident at reviewing code — not for feature completeness.
