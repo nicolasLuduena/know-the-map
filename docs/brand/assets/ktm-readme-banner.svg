@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="300" viewBox="0 0 1200 300"><rect width="1200" height="300" fill="#0B1F2A"/><g transform="translate(74 66) scale(1.45)"><rect width="96" height="96" fill="#0B1F2A"/>
+    <g fill="none" stroke="#FFFFFF" stroke-width="7" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M25 17 V79"/>
+      <path d="M25 48 H45 L74 19"/>
+      <path d="M45 48 L74 77"/>
+    </g>
+    <g fill="#FFFFFF">
+      <circle cx="25" cy="17" r="7"/><circle cx="25" cy="79" r="7"/>
+      <circle cx="74" cy="19" r="7"/><circle cx="74" cy="77" r="7"/>
+    </g>
+    <circle cx="45" cy="48" r="9" fill="#C7F23D" stroke="#FFFFFF" stroke-width="4"/>
+    </g><text x="245" y="118" fill="#FFFFFF" font-family="Inter, Arial, sans-serif" font-size="34" font-weight="750" letter-spacing="-1">Know the Map</text><text x="245" y="142" fill="#DDE5E2" font-family="Inter, Arial, sans-serif" font-size="12" font-weight="600" letter-spacing="1.1">BY BLEENTR</text><text x="245" y="176" fill="#DDE5E2" font-family="Inter, Arial, sans-serif" font-size="21">Understand the system behind the change.</text><path d="M245 205 H1090" stroke="#2F7F78" stroke-width="2"/><circle cx="1090" cy="205" r="8" fill="#C7F23D"/></svg>
