@@ -138,9 +138,9 @@ include:
 - stacked-PR feature trajectories and earlier-history exploration;
 - richer Story, Map, and Code views.
 
-Their behavior and activation rules live in
-[`docs/CAPABILITY_CATALOG.md`](./docs/CAPABILITY_CATALOG.md). Appearing in that
-catalog does not make a capability part of the MVP.
+Their behavior, activation rules, and prioritization are tracked in
+[GitHub issue #22](https://github.com/nicolasLuduena/know-the-map/issues/22).
+Appearing in that backlog does not make a capability part of the MVP.
 
 ## What to validate
 
@@ -182,7 +182,7 @@ That is the source-of-truth principle for product and architecture decisions.
 
 ## Document map
 
-- [Candidate capability catalog](./docs/CAPABILITY_CATALOG.md)
+- [Optional capability backlog](https://github.com/nicolasLuduena/know-the-map/issues/22)
 - [Proposed architecture](./docs/architecture/PROPOSED_ARCHITECTURE.md)
 - [Component interaction traces](./docs/architecture/INTERACTION_TRACES.md)
 - [Interfaces and module ownership](./docs/architecture/INTERFACES.md)

@@ -9,8 +9,8 @@
 
 Companion documents:
 
-- [`../CAPABILITY_CATALOG.md`](../CAPABILITY_CATALOG.md) describes optional,
-  demand-loaded product capabilities.
+- [GitHub issue #22](https://github.com/nicolasLuduena/know-the-map/issues/22)
+  tracks optional, demand-loaded product capabilities.
 - [`INTERACTION_TRACES.md`](./INTERACTION_TRACES.md) follows the important
   workflows call by call.
 - [`INTERFACES.md`](./INTERFACES.md) proposes the TypeScript/Effect contracts and
