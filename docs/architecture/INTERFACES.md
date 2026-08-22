@@ -801,8 +801,8 @@ type AnalysisTask<Result extends AnalysisResult = AnalysisResult> = {
   id: AnalysisTaskId
   kind:
     | "decompose-repository"
-    | "decompose-component"
-    | "interpret-component"
+    | "explore-component"
+    | "deduplicate-components"
     | "route-question"
     | "answer-question"
     | "discover-flows"
@@ -821,13 +821,42 @@ type AnalysisTask<Result extends AnalysisResult = AnalysisResult> = {
 
 type AnalysisResult =
   | ComponentPlan
-  | ComponentAnalysisDraft
+  | ComponentExplorationDraft
+  | ComponentDeduplicationPlan
   | QuestionRoute
   | Answer
   | FlowCatalogDraft
   | FlowTraceDraft
   | ComponentReviewDraft
   | CrossComponentReviewDraft
+
+type ComponentExplorationDraft = {
+  analysis: ComponentAnalysisDraft
+  childPlan?: ComponentPlan
+}
+
+type ComponentDeduplicationDecision =
+  | {
+      kind: "merge"
+      canonicalId: ComponentId
+      duplicateIds: ReadonlyArray<ComponentId>
+      reason: string
+    }
+  | {
+      kind: "shared-reference"
+      componentId: ComponentId
+      parentIds: ReadonlyArray<ComponentId>
+      reason: string
+    }
+  | {
+      kind: "keep-separate"
+      componentIds: ReadonlyArray<ComponentId>
+      reason: string
+    }
+
+type ComponentDeduplicationPlan = {
+  decisions: ReadonlyArray<ComponentDeduplicationDecision>
+}
 ```
 
 The task carries a schema, so invalid model output is a harness failure rather

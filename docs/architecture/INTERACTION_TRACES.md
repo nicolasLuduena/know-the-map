@@ -82,12 +82,18 @@ sequenceDiagram
     RW-->>IE: RepositoryManifest
     IE->>HR: execute(DecomposeRepositoryTask)
     HR-->>IE: ComponentPlan
-    loop each component
-        IE->>HR: execute(InterpretComponentTask)
-        HR-->>IE: ComponentAnalysisDraft
-        IE->>RW: verifyAnchors(snapshotId, draft.anchors)
+    loop each component recursively
+        IE->>HR: execute(ExploreComponentTask)
+        HR-->>IE: ComponentExplorationDraft
+        IE->>RW: verifyAnchors(snapshotId, draft.analysis.anchors)
         RW-->>IE: VerifiedCodeAnchors
+        opt draft proposes children
+            IE->>IE: validate and schedule child components
+        end
     end
+    IE->>HR: execute(DeduplicateComponentsTask)
+    HR-->>IE: ComponentDeduplicationPlan
+    IE->>IE: validate merges, shared references, and coverage
     IE->>KB: publishIndex(IndexPublication)
     KB-->>IE: WikiVersion
     IE-->>API: IndexCompleted
@@ -111,10 +117,16 @@ ReviewApi.indexRepository(request)
       │     ├─ prompt(structuredTask)
       │     └─ decodeSubmittedResult(resultSchema)
       ├─ validate ComponentPlan
-      ├─ analyzeComponent(component) for each leaf
-      │  ├─ HarnessRuntime.execute(InterpretComponentTask)
+      ├─ exploreComponent(component) recursively
+      │  ├─ HarnessRuntime.execute(ExploreComponentTask)
       │  ├─ RepositoryWorkspace.verifyAnchors(snapshotId, proposedAnchors)
-      │  └─ validate ComponentAnalysisDraft
+      │  ├─ validate component-level evidence and interpretations
+      │  └─ validate and schedule proposed children, if any
+      ├─ HarnessRuntime.execute(DeduplicateComponentsTask)
+      ├─ validate ComponentDeduplicationPlan
+      │  ├─ preserve every evidence and interpretation reference
+      │  ├─ merge duplicates or record shared references
+      │  └─ recheck selector coverage
       ├─ KnowledgeBase.publishIndex(IndexPublication)
       └─ KnowledgeBase.completeAnalysisRun(
            runId,
@@ -129,29 +141,31 @@ Base commits the complete component tree and its interpretations in one
 transaction. Until that succeeds, readers continue to see the previous wiki
 version.
 
-## Trace 3: Recursively split an oversized component
+## Trace 3: Explore and optionally split a component
 
 ### User intent
 
-The planner identifies a component that cannot be interpreted within the
-configured context or cost budget.
+The engine explores a component at its own level. It preserves evidence about the
+component boundary and, when further division improves understanding or coverage,
+schedules child exploration as well.
 
 ### Call stack
 
 ```text
-IntelligenceEngine.analyzeComponent(componentDraft, traversalState)
-├─ estimateComponent(componentDraft, repositoryManifest)
-├─ if within leaf policy:
-│  └─ HarnessRuntime.execute(InterpretComponentTask)
-└─ if oversized:
-   ├─ assert traversalState.depth < policy.maxDepth
-   ├─ assert traversalState.tasks < policy.maxTasks
-   ├─ HarnessRuntime.execute(DecomposeComponentTask)
+IntelligenceEngine.exploreComponent(componentDraft, traversalState)
+├─ HarnessRuntime.execute(ExploreComponentTask)
+│  └─ return component-level evidence, interpretations, and optional child plan
+├─ RepositoryWorkspace.verifyAnchors(snapshotId, proposedAnchors)
+├─ retain verified parent evidence whether or not children exist
+├─ if marked as leaf:
+│  └─ record detailed leaf coverage
+└─ if children proposed:
+   ├─ assert traversalState remains within depth and task budgets
    ├─ validate child selectors
    │  ├─ children stay inside parent selectors
    │  ├─ overlap remains within policy
    │  └─ no child repeats an ancestor manifest hash
-   └─ analyzeComponent(child, traversalState.next()) for each child
+   └─ exploreComponent(child, traversalState.next()) for each child
 ```
 
 ### Division of responsibility

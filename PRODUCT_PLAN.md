@@ -18,22 +18,26 @@ means.
 
 The irreducible product is one loop:
 
-1. Capture hard evidence from a reproducible code snapshot.
+1. Capture a reproducible code snapshot.
 2. Recursively identify components until each leaf is a coherent unit that can be
    explored well.
-3. Explore every leaf—or record an explicit coverage gap—to gather evidence across
-   the repository.
-4. Record a human or AI interpretation separately from that evidence.
-5. Bind the interpretation to the exact evidence and code scope supporting it.
-6. Detect when the supporting code changes.
-7. Reduce the interpretation's freshness until it is revalidated.
-8. Let a person inspect, correct, dismiss, accept, or supersede it.
+3. Gather evidence at every component level, then explore every leaf—or record an
+   explicit coverage gap—for the required detail.
+4. Reconcile duplicate or overlapping components produced by independent agents
+   without losing evidence or coverage.
+5. Record a human or AI interpretation separately from that evidence.
+6. Bind the interpretation to the exact evidence and code scope supporting it.
+7. Detect when the supporting code changes.
+8. Reduce the interpretation's freshness until it is revalidated.
+9. Let a person inspect, correct, dismiss, accept, or supersede it.
 
 ```text
 Code at snapshot A
   ↓ recursively divide into coherent components
-Leaf-component exploration
+Component exploration at every level
   ↓ capture facts across the repository
+Component reconciliation
+  ↓ merge duplicates and preserve shared references
 Evidence
   ↓ explain what those facts mean
 Interpretations bound to evidence
@@ -76,8 +80,8 @@ into proof.
 
 ### Capabilities are loaded by intent
 
-Component discovery and exploration, evidence tracking, interpretation binding, and
-freshness are always active.
+Component discovery, exploration and deduplication, evidence tracking, interpretation
+binding, and freshness are always active.
 Optional capabilities advertise a compact description and load their prompts,
 tools, context, and tasks only when the user requests them or explicitly enables
 them in a review policy.
@@ -88,7 +92,7 @@ do not automatically enable that capability later.
 
 ```text
 always active
-  component exploration → evidence ↔ interpretation ↔ freshness
+  component exploration → deduplication → evidence ↔ interpretation ↔ freshness
 
 available on demand
   visual map · PR synthesis · Q&A · flow tracing · test gaps · review lenses
@@ -123,12 +127,14 @@ The first product is one narrow end-to-end slice:
 1. Open one repository at a reproducible baseline snapshot.
 2. Recursively divide it into components until each leaf is coherent and bounded
    enough to explore.
-3. Explore the leaves and account for repository coverage.
-4. Capture code evidence with stable, verifiable anchors.
-5. Create human and AI interpretations bound to that evidence.
-6. Change the code and identify affected interpretations.
-7. Show why their freshness changed.
-8. Let a person confirm, correct, dismiss, or supersede them.
+3. Capture evidence belonging to parent components as well as detailed leaf evidence,
+   and account for repository coverage.
+4. Reconcile repeated or overlapping components without discarding their evidence.
+5. Capture code evidence with stable, verifiable anchors.
+6. Create human and AI interpretations bound to that evidence.
+7. Change the code and identify affected interpretations.
+8. Show why their freshness changed.
+9. Let a person confirm, correct, dismiss, or supersede them.
 
 A recursive component hierarchy is required because it is the exploration strategy.
 A polished component-map UI, chat interface, semantic PR summary, flow analysis,

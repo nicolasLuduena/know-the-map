@@ -15,9 +15,11 @@ Companion material:
 ## Architecture at a glance
 
 The core system starts at a chosen repository snapshot, recursively divides the
-code into coherent components, explores the leaf components, and records evidence
-and interpretations. Later snapshots transition the evidence anchors and determine
-which interpretations may no longer hold.
+code into coherent components, and records evidence and interpretations at the
+component level where they belong. Leaf components provide detailed coverage, but
+divisible parents may still contribute boundary-level knowledge. Later snapshots
+transition the evidence anchors and determine which interpretations may no longer
+hold.
 
 ```text
 repository snapshot
@@ -27,9 +29,13 @@ compact manifest
 identify top-level components
   ↓
 recursively subdivide each component
-  ↓ until further division would not improve understanding
-leaf-component exploration
+  ├─ record evidence and interpretations belonging to this level
+  └─ continue until further division would not improve understanding
+       ↓
+     detailed leaf coverage
   ↓
+global component reconciliation
+  ↓ merge duplicates or create shared references without losing evidence
 verified evidence anchors + proposed interpretations
   ↓
 human decisions and persisted knowledge
@@ -76,6 +82,10 @@ leaf is small and cohesive enough to explore well.
 Component boundaries are AI-proposed and application-validated. They are useful
 interpretations of repository structure, not permanent facts baked into domain
 identity.
+
+Because components are proposed independently, a global reconciliation pass is
+mandatory after recursive exploration. The pass identifies duplicate, overlapping,
+or differently named representations of the same responsibility.
 
 ### The application orchestrates; the harness executes
 
@@ -140,9 +150,9 @@ owns transactions and SQLite details.
 ### Intelligence Engine
 
 The core application brain. It recursively decomposes repository scopes, schedules
-leaf exploration, assembles bounded context, validates structured agent results,
-coordinates freshness revalidation, and activates optional capabilities only when
-requested.
+component exploration, reconciles duplicate components, assembles bounded context,
+validates structured agent results, coordinates freshness revalidation, and activates
+optional capabilities only when requested.
 
 ### Harness Runtime
 
@@ -175,11 +185,16 @@ policy, leave unexplained coverage, or point to code absent from the snapshot.
 
 ### Recursive decision
 
-Each accepted component receives its own bounded exploration task. That task either:
+Each accepted component receives its own bounded exploration task. The task may
+return evidence and interpretations that belong to that component regardless of
+whether it is divisible. It also either marks the component as a leaf or proposes
+children because further division would materially improve coverage or
+understanding.
 
-1. returns a leaf analysis containing evidence and interpretations; or
-2. proposes child components because further division would materially improve
-   coverage or understanding.
+Parent-level evidence commonly covers public contracts, entry points, shared
+configuration, cross-child relationships, or behavior that emerges at the component
+boundary. Child tasks add finer-grained evidence; they do not replace or invalidate
+the parent's evidence merely by existing.
 
 The Intelligence Engine validates child selectors, then schedules children as new
 tasks. Pi does not recursively spawn them on its own.
@@ -187,14 +202,14 @@ tasks. Pi does not recursively spawn them on its own.
 ```text
 explore(component, depth)
   ├─ inspect bounded component context
+  ├─ gather evidence belonging to this component level
+  ├─ propose anchored component-level interpretations
   ├─ if meaningfully divisible
   │    ├─ propose child components
   │    ├─ validate containment and coverage
   │    └─ explore each child within shared budgets
   └─ otherwise
-       ├─ gather evidence
-       ├─ propose anchored interpretations
-       └─ record leaf coverage
+       └─ record detailed leaf coverage
 ```
 
 ### Leaf criterion
@@ -223,6 +238,30 @@ Every non-ignored path in the initial scope must be:
 
 This coverage accounting is what makes component decomposition a dependable way to
 gather evidence rather than merely generate a plausible architecture diagram.
+Evidence may be attached to any component level. Path ownership by a leaf prevents
+coverage ambiguity; it does not prohibit a parent interpretation from citing anchors
+inside its descendants.
+
+### Global reconciliation
+
+After all recursive tasks finish, the Intelligence Engine gives a deduplication agent
+the compact component descriptors, selectors, parent paths, summaries, and evidence
+references. It does not need to resend all component code.
+
+The agent proposes one of three outcomes for suspected repetition:
+
+- **merge:** two nodes represent the same responsibility and scope;
+- **shared reference:** one real component is legitimately used beneath multiple
+  conceptual parents;
+- **keep separate:** similar names or code do not represent the same component.
+
+The proposal is advisory. Know the Map validates selector overlap and component
+containment, chooses a canonical identity, remaps evidence and interpretations, and
+rechecks total coverage before publication. It never discards an anchor, interpretation,
+or human note merely because a component was merged.
+
+Ambiguous cases remain separate and are marked for later review. False duplicates are
+less damaging than an automatic merge that erases a meaningful boundary.
 
 ## Core records
 
@@ -251,8 +290,10 @@ ApplicationServer.index(baseline)
       ├─ RepositoryWorkspace.manifest(snapshot)
       ├─ HarnessRuntime.execute(DecomposeRepositoryTask)
       ├─ validate top-level component coverage
-      ├─ recursively explore component tasks
-      ├─ RepositoryWorkspace.verifyAnchors(proposed evidence)
+      ├─ recursively explore component tasks and verify their anchors
+      ├─ HarnessRuntime.execute(DeduplicateComponentsTask)
+      ├─ validate reconciliation and remap knowledge
+      ├─ recheck coverage after reconciliation
       └─ KnowledgeBase.publishBaseline(
            component hierarchy,
            evidence,
@@ -347,11 +388,12 @@ The first implementation supports:
 
 1. one repository and a chosen baseline snapshot;
 2. recursive, budgeted component decomposition;
-3. complete or explicitly qualified leaf coverage;
-4. evidence gathering with verified anchors;
-5. human and Pi-generated interpretations tied to those anchors;
-6. a later snapshot and mechanical freshness evaluation;
-7. a minimal UI for inspecting evidence and acting on interpretations.
+3. evidence gathering at parent and leaf component levels with verified anchors;
+4. global component deduplication and reconciliation;
+5. complete or explicitly qualified leaf coverage after reconciliation;
+6. human and Pi-generated interpretations tied to those anchors;
+7. a later snapshot and mechanical freshness evaluation;
+8. a minimal UI for inspecting evidence and acting on interpretations.
 
 Deferred capabilities are tracked in
 [GitHub issue #22](https://github.com/nicolasLuduena/know-the-map/issues/22).
@@ -359,6 +401,7 @@ Deferred capabilities are tracked in
 ## Open architectural decisions
 
 - The initial component leaf heuristic and default decomposition budgets.
+- The similarity threshold for proposing component reconciliation candidates.
 - How shared code is represented without silently duplicating coverage.
 - Whether AI interpretations begin proposed or accepted-with-an-AI-label.
 - How repository-wide human notes inherit when component boundaries change.
