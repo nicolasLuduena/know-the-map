@@ -9,6 +9,8 @@
 
 Companion documents:
 
+- [`../CAPABILITY_CATALOG.md`](../CAPABILITY_CATALOG.md) describes optional,
+  demand-loaded product capabilities.
 - [`INTERACTION_TRACES.md`](./INTERACTION_TRACES.md) follows the important
   workflows call by call.
 - [`INTERFACES.md`](./INTERFACES.md) proposes the TypeScript/Effect contracts and
@@ -557,21 +559,25 @@ boundaries, user-decision semantics, or protocol versioning.
 
 ## MVP
 
-The first useful release should support:
+The first useful release implements only the evidence–interpretation freshness
+loop required by `PRODUCT_PLAN.md`:
 
 1. Open one local Git repository.
-2. Capture a committed or dirty-worktree snapshot.
-3. Produce a recursive component map through Pi-backed analysis tasks.
-4. Generate component briefs and anchored interpretation cards.
-5. Browse the local wiki and exact supporting code.
-6. Ask questions using progressive component loading.
-7. Compare two snapshots and mark affected interpretations.
-8. Generate a component-oriented semantic review.
-9. Accept, correct, dismiss, and persist proposed interpretations.
-10. Refresh only affected components after a code change.
+2. Capture a committed or dirty-worktree baseline snapshot and verifiable code
+   anchors.
+3. Create human and Pi-generated interpretations bound to those anchors.
+4. Capture a later snapshot and transition or invalidate the anchors.
+5. Explain which interpretations lost freshness and why.
+6. Accept, correct, dismiss, or supersede an interpretation without losing its
+   provenance.
 
 Deferred until the loop is useful:
 
+- recursive component maps and briefs;
+- repository Q&A;
+- semantic PR synthesis and specialized review lenses;
+- test-gap and detailed flow analysis;
+- stacked-PR trajectories and earlier-history exploration;
 - multiple languages beyond what agents can inspect directly;
 - a dedicated graph database;
 - generalized event sourcing;
