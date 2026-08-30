@@ -200,5 +200,4 @@ That is the source-of-truth principle for product and architecture decisions.
 ## Document map
 
 - [Optional capability backlog](https://github.com/nicolasLuduena/know-the-map/issues/22)
-- [Proposed architecture](./docs/architecture/PROPOSED_ARCHITECTURE.md)
 - [Review UI options](./docs/design/UI_OPTIONS.md)
