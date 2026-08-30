@@ -1,6 +1,6 @@
 import { Context, Effect, Layer } from "effect";
 import { NotImplementedError } from "./errors.ts";
-import { HarnessRequest, HarnessResult } from "./protocol.ts";
+import type { HarnessRequest, HarnessResult } from "./protocol.ts";
 
 /**
  * A replaceable execution harness. Know the Map owns orchestration, schemas
@@ -11,9 +11,12 @@ import { HarnessRequest, HarnessResult } from "./protocol.ts";
  * result out. TODO: decide later whether multi-turn sessions belong in this
  * interface or in a separate one.
  */
-export class Harness extends Context.Service<Harness, {
-  execute(request: HarnessRequest): Effect.Effect<HarnessResult, HarnessError>;
-}>()("@know-the-map/harness/Harness") {}
+export class Harness extends Context.Service<
+  Harness,
+  {
+    execute(request: HarnessRequest): Effect.Effect<HarnessResult, HarnessError>;
+  }
+>()("@know-the-map/harness/Harness") {}
 
 /**
  * TODO: grow this union as real failure modes are designed (transport
@@ -30,9 +33,6 @@ export type HarnessError = NotImplementedError;
 export const HarnessStub: Layer.Layer<Harness> = Layer.succeed(
   Harness,
   Harness.of({
-    execute: () =>
-      Effect.fail(
-        new NotImplementedError({ message: "harness is not implemented" }),
-      ),
+    execute: () => Effect.fail(new NotImplementedError({ message: "harness is not implemented" })),
   }),
 );

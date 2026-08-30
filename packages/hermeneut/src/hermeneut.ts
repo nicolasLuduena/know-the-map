@@ -1,5 +1,5 @@
-import { Context, Effect, Layer } from "effect";
 import { NotImplementedError } from "@know-the-map/harness";
+import { Context, Effect, Layer } from "effect";
 
 /**
  * The deterministic leader of the interpretation process.
@@ -15,9 +15,12 @@ import { NotImplementedError } from "@know-the-map/harness";
  * until the process concludes. Nothing about that shape is fixed yet, so the
  * service exposes a single stub entry point.
  */
-export class Hermeneut extends Context.Service<Hermeneut, {
-  run(): Effect.Effect<void, NotImplementedError>;
-}>()("@know-the-map/hermeneut/Hermeneut") {}
+export class Hermeneut extends Context.Service<
+  Hermeneut,
+  {
+    run(): Effect.Effect<void, NotImplementedError>;
+  }
+>()("@know-the-map/hermeneut/Hermeneut") {}
 
 /**
  * Stub implementation. Fails loudly until the loop is designed.
@@ -26,8 +29,6 @@ export const HermeneutStub: Layer.Layer<Hermeneut> = Layer.succeed(
   Hermeneut,
   Hermeneut.of({
     run: () =>
-      Effect.fail(
-        new NotImplementedError({ message: "hermeneut loop is not implemented" }),
-      ),
+      Effect.fail(new NotImplementedError({ message: "hermeneut loop is not implemented" })),
   }),
 );

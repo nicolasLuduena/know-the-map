@@ -1,10 +1,10 @@
-import { Effect, Layer } from "effect";
 import {
   Harness,
-  HarnessRequest,
-  HarnessResult,
+  type HarnessRequest,
+  type HarnessResult,
   NotImplementedError,
 } from "@know-the-map/harness";
+import { Effect, Layer } from "effect";
 
 /**
  * Pi adapter for the `Harness` interface.
@@ -21,8 +21,6 @@ export const PiHarnessLive: Layer.Layer<Harness> = Layer.succeed(
   Harness,
   Harness.of({
     execute: (_request: HarnessRequest): Effect.Effect<HarnessResult, NotImplementedError> =>
-      Effect.fail(
-        new NotImplementedError({ message: "pi harness is not implemented" }),
-      ),
+      Effect.fail(new NotImplementedError({ message: "pi harness is not implemented" })),
   }),
 );

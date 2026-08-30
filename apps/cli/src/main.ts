@@ -1,9 +1,9 @@
 #!/usr/bin/env bun
-import { Effect } from "effect";
 import { NotImplementedError } from "@know-the-map/harness";
 import { OpencodeHarnessLive } from "@know-the-map/harness-opencode";
 import { PiHarnessLive } from "@know-the-map/harness-pi";
 import { Hermeneut, HermeneutStub } from "@know-the-map/hermeneut";
+import { Effect } from "effect";
 
 const VERSION = "0.0.0";
 
@@ -19,12 +19,10 @@ Options:
   -v, --version  Print version
 `;
 
-const program = Effect.gen(function*() {
+const program = Effect.gen(function* () {
   const hermeneut = yield* Hermeneut;
   yield* hermeneut.run();
-}).pipe(
-  Effect.provide([HermeneutStub, OpencodeHarnessLive, PiHarnessLive]),
-);
+}).pipe(Effect.provide([HermeneutStub, OpencodeHarnessLive, PiHarnessLive]));
 
 async function run(): Promise<number> {
   const failure = await Effect.runPromise(Effect.flip(program)).then(
@@ -55,7 +53,11 @@ async function main(): Promise<number> {
     return 0;
   }
 
-  const command = args[0]!;
+  const command = args.at(0);
+  if (command === undefined) {
+    console.log(HELP);
+    return 0;
+  }
   switch (command) {
     case "run": {
       return await run();
