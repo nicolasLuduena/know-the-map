@@ -1,5 +1,4 @@
 #!/usr/bin/env bun
-import { NotImplementedError } from "@know-the-map/harness";
 import { OpencodeHarnessLive } from "@know-the-map/harness-opencode";
 import { PiHarnessLive } from "@know-the-map/harness-pi";
 import { Hermeneut, HermeneutStub } from "@know-the-map/hermeneut";
@@ -22,24 +21,22 @@ Options:
 const program = Effect.gen(function* () {
   const hermeneut = yield* Hermeneut;
   yield* hermeneut.run();
-}).pipe(Effect.provide([HermeneutStub, OpencodeHarnessLive, PiHarnessLive]));
-
-async function run(): Promise<number> {
-  const failure = await Effect.runPromise(Effect.flip(program)).then(
-    (error) => error,
-    () => undefined,
-  );
-
-  if (failure === undefined) {
-    return 0;
-  }
-  if (failure instanceof NotImplementedError) {
-    console.error(`ktm: ${failure.message}`);
-  } else {
-    console.error("ktm: unexpected failure", failure);
-  }
-  return 1;
-}
+}).pipe(
+  Effect.provide([HermeneutStub, OpencodeHarnessLive, PiHarnessLive]),
+  Effect.as(0),
+  Effect.catchTag("NotImplementedError", (error) =>
+    Effect.sync(() => {
+      console.error(`ktm: ${error.message}`);
+      return 1;
+    }),
+  ),
+  Effect.catch((error) =>
+    Effect.sync(() => {
+      console.error("ktm: unexpected failure", error);
+      return 1;
+    }),
+  ),
+);
 
 async function main(): Promise<number> {
   const args = Bun.argv.slice(2);
@@ -60,7 +57,7 @@ async function main(): Promise<number> {
   }
   switch (command) {
     case "run": {
-      return await run();
+      return await Effect.runPromise(program);
     }
     default: {
       console.error(`ktm: unknown command "${command}"`);

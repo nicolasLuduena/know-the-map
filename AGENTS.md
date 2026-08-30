@@ -1,3 +1,9 @@
+# Coding standards
+
+Before writing any TypeScript code, first read `docs/coding-standards.md`
+**completely**. It aggregates the repository's preferences and is updated as
+new ones are settled. The Effect section below then governs Effect code.
+
 # Learning more about Effect
 
 This repository uses the Effect Typescript library.
