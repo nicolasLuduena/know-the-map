@@ -4,7 +4,6 @@
 > information architecture; they are not implementation specifications.
 >
 > Product context: [`PRODUCT.md`](../../PRODUCT.md)
-> Architecture: [`PROPOSED_ARCHITECTURE.md`](../architecture/PROPOSED_ARCHITECTURE.md)
 
 ## Product framing
 
