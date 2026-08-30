@@ -1,11 +1,11 @@
 import { Effect, Runtime } from "effect";
-import { PiHarness } from "./pi-harness.ts";
+import { Opencode2Harness } from "./opencode2-harness.ts";
 
 const program = Effect.gen(function* () {
-  const harness = yield* PiHarness;
+  const harness = yield* Opencode2Harness;
   const request = {
-    topic: "what-the-hunk",
-    angle: "what does this repository do and how is it structured",
+    topic: "structured transport",
+    angle: "confirm that a typed request can make a round trip",
     maxPoints: 3,
   };
   const result = yield* harness.execute(request);
@@ -16,9 +16,9 @@ const program = Effect.gen(function* () {
   }
   return result;
 }).pipe(
-  Effect.timeout("90 seconds"),
+  Effect.timeout("120 seconds"),
   Effect.scoped,
-  Effect.provide(PiHarness.Live),
+  Effect.provide(Opencode2Harness.Live),
 );
 
 Runtime.makeRunMain(({ fiber, teardown }) => {

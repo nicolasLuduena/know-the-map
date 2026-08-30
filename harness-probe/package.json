@@ -5,6 +5,9 @@
   "private": true,
   "scripts": {
     "start": "bun run src/main.ts",
+    "start:oc2": "bun run src/main-opencode2.ts",
+    "catalog:oc2": "bun run catalog-probe.ts",
+    "test": "bun test",
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
@@ -15,7 +18,9 @@
   },
   "dependencies": {
     "@earendil-works/pi-coding-agent": "^0.84.3",
-    "effect": "^4.0.0-beta.107",
+    "@opencode-ai/plugin": "0.0.0-dev-18567",
+    "@opencode-ai/sdk": "0.0.0-dev-18567",
+    "effect": "4.0.0-rc.112",
     "typebox": "^1.3.7"
   }
 }

@@ -9,7 +9,13 @@ import {
   defineTool,
   getAgentDir,
 } from "@earendil-works/pi-coding-agent";
-import { EchoRequest, EchoResult, EchoResultWire, renderRequestPrompt } from "./schemas.ts";
+import {
+  EchoRequest,
+  EchoResult,
+  EchoResultForRequest,
+  EchoResultWire,
+  renderRequestPrompt,
+} from "./schemas.ts";
 
 const SYSTEM_PROMPT = `You are a structured echo assistant for a transport probe.
 
@@ -258,7 +264,9 @@ export class PiHarness extends Context.Service<PiHarness, {
         }
 
         yield* Effect.logInfo("Validating submitted result");
-        const result = yield* Schema.decodeUnknownEffect(EchoResult)(submitted).pipe(
+        const result = yield* Schema.decodeUnknownEffect(
+          EchoResultForRequest(request),
+        )(submitted).pipe(
           Effect.mapError((cause) =>
             new InvalidResultError({ message: "submit_result payload failed validation", cause }),
           ),

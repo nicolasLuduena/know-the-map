@@ -4,7 +4,9 @@ import { Type } from "typebox";
 export const EchoRequest = Schema.Struct({
   topic: Schema.String,
   angle: Schema.String,
-  maxPoints: Schema.Int,
+  maxPoints: Schema.Int.pipe(
+    Schema.check(Schema.isGreaterThanOrEqualTo(0)),
+  ),
 });
 export type EchoRequest = Schema.Schema.Type<typeof EchoRequest>;
 
@@ -20,6 +22,26 @@ export const EchoResult = Schema.Struct({
   ),
 });
 export type EchoResult = Schema.Schema.Type<typeof EchoResult>;
+
+export const EchoResultForRequest = (request: EchoRequest) =>
+  EchoResult.check(
+    Schema.makeFilter((result) => {
+      const issues: Array<Schema.FilterIssue> = [];
+      if (result.echoedTopic !== request.topic) {
+        issues.push({
+          path: ["echoedTopic"],
+          issue: `must equal the request topic ${JSON.stringify(request.topic)}`,
+        });
+      }
+      if (result.keyPoints.length > request.maxPoints) {
+        issues.push({
+          path: ["keyPoints"],
+          issue: `must contain at most ${request.maxPoints} entries`,
+        });
+      }
+      return issues;
+    }),
+  );
 
 export const EchoResultWire = Type.Object({
   status: Type.Literal("success"),
