@@ -9,6 +9,11 @@ Never hide errors. No silent defaults, no placeholder success, no swallowed
 rejections. Undesigned code fails with `NotImplementedError` from
 `@know-the-map/harness`. A loud failure beats a silent wrong answer.
 
+This includes catch-alls: do not add blanket fallbacks (`Effect.catch`,
+broad `try/catch`) "just in case". Handle exactly the tagged errors the
+channel declares; let anything unexpected crash loudly instead of turning
+into a generic "unexpected failure" message.
+
 ## Preconditions
 
 When Effect Schema or the type system cannot guarantee a precondition, assert
@@ -33,8 +38,8 @@ pass.
 - `Effect.gen` / `Effect.fn` with combinators in `.pipe` (see `AGENTS.md`).
 - Services: `Context.Service` + static `Layer`. Errors: `Schema.TaggedError`.
 - Keep errors typed; no `Exit`/`flip` gymnastics. Cross to imperative land
-  once: `Effect.as(0)` *before* `Effect.catchTag` / `Effect.catch` handlers
-  that report and return the exit code, then one `Effect.runPromise`.
+  once: `Effect.as(0)` *before* the `Effect.catchTag` handlers that report
+  and return the exit code, then one `Effect.runPromise`.
 
 ## Monorepo
 

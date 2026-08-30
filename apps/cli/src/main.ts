@@ -30,12 +30,6 @@ const program = Effect.gen(function* () {
       return 1;
     }),
   ),
-  Effect.catch((error) =>
-    Effect.sync(() => {
-      console.error("ktm: unexpected failure", error);
-      return 1;
-    }),
-  ),
 );
 
 async function main(): Promise<number> {
