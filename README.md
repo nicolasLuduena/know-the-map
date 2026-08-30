@@ -8,6 +8,5 @@ changes easier to understand and review.
 ## Current direction
 
 - [Product plan](./PRODUCT_PLAN.md) — approved product thesis and scope
-- [Proposed local wiki architecture](./docs/architecture/PROPOSED_ARCHITECTURE.md)
 - [Review UI options](./docs/design/UI_OPTIONS.md)
 - [Product design context](./PRODUCT.md)

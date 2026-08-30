@@ -1,0 +1,29 @@
+{
+  "name": "what-the-hunk",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "catalog": {
+    "@biomejs/biome": "^2.5.11",
+    "@effect/platform-bun": "4.0.0-rc.112",
+    "effect": "4.0.0-rc.112",
+    "typescript": "^5",
+    "@types/bun": "latest"
+  },
+  "scripts": {
+    "test": "bun test packages apps",
+    "typecheck": "tsc --noEmit",
+    "check": "biome check packages apps",
+    "fix": "biome check --write packages apps",
+    "ktm": "bun run apps/cli/src/main.ts"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "catalog:",
+    "@types/bun": "catalog:",
+    "effect": "catalog:",
+    "typescript": "catalog:"
+  }
+}
