@@ -1,0 +1,17 @@
+{
+  "name": "@know-the-map/cli",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "ktm": "./src/main.ts",
+    "know-the-map": "./src/main.ts"
+  },
+  "dependencies": {
+    "@know-the-map/harness": "workspace:*",
+    "@know-the-map/harness-opencode": "workspace:*",
+    "@know-the-map/harness-pi": "workspace:*",
+    "@know-the-map/hermeneut": "workspace:*",
+    "effect": "catalog:"
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "name": "@know-the-map/harness-pi",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@know-the-map/harness": "workspace:*",
+    "effect": "catalog:"
+  }
+}

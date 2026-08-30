@@ -1,0 +1,71 @@
+#!/usr/bin/env bun
+import { Effect } from "effect";
+import { NotImplementedError } from "@know-the-map/harness";
+import { OpencodeHarnessLive } from "@know-the-map/harness-opencode";
+import { PiHarnessLive } from "@know-the-map/harness-pi";
+import { Hermeneut, HermeneutStub } from "@know-the-map/hermeneut";
+
+const VERSION = "0.0.0";
+
+const HELP = `ktm — Know the Map
+
+Usage: ktm [command]
+
+Commands:
+  run  Start the interpretation loop (not implemented yet)
+
+Options:
+  -h, --help     Print help
+  -v, --version  Print version
+`;
+
+const program = Effect.gen(function*() {
+  const hermeneut = yield* Hermeneut;
+  yield* hermeneut.run();
+}).pipe(
+  Effect.provide([HermeneutStub, OpencodeHarnessLive, PiHarnessLive]),
+);
+
+async function run(): Promise<number> {
+  const failure = await Effect.runPromise(Effect.flip(program)).then(
+    (error) => error,
+    () => undefined,
+  );
+
+  if (failure === undefined) {
+    return 0;
+  }
+  if (failure instanceof NotImplementedError) {
+    console.error(`ktm: ${failure.message}`);
+  } else {
+    console.error("ktm: unexpected failure", failure);
+  }
+  return 1;
+}
+
+async function main(): Promise<number> {
+  const args = Bun.argv.slice(2);
+
+  if (args.includes("-v") || args.includes("--version")) {
+    console.log(VERSION);
+    return 0;
+  }
+  if (args.length === 0 || args.includes("-h") || args.includes("--help")) {
+    console.log(HELP);
+    return 0;
+  }
+
+  const command = args[0]!;
+  switch (command) {
+    case "run": {
+      return await run();
+    }
+    default: {
+      console.error(`ktm: unknown command "${command}"`);
+      console.log(HELP);
+      return 1;
+    }
+  }
+}
+
+process.exit(await main());

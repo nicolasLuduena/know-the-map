@@ -1,0 +1,24 @@
+{
+  "name": "what-the-hunk",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "catalog": {
+    "effect": "4.0.0-rc.112",
+    "typescript": "^5",
+    "@types/bun": "latest"
+  },
+  "scripts": {
+    "test": "bun test packages apps",
+    "typecheck": "tsc --noEmit",
+    "ktm": "bun run apps/cli/src/main.ts"
+  },
+  "devDependencies": {
+    "@types/bun": "catalog:",
+    "effect": "catalog:",
+    "typescript": "catalog:"
+  }
+}
