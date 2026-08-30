@@ -8,6 +8,7 @@
     "know-the-map": "./src/main.ts"
   },
   "dependencies": {
+    "@effect/platform-bun": "catalog:",
     "@know-the-map/harness": "workspace:*",
     "@know-the-map/harness-opencode": "workspace:*",
     "@know-the-map/harness-pi": "workspace:*",
