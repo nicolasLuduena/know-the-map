@@ -251,6 +251,19 @@ test(`kind "other" without customKind triggers a clarification`, async () => {
   expect(sent[2]?.prompt).toContain("customKind");
 });
 
+test("a payload that fails the answer contract triggers a clarification, then the run recovers", async () => {
+  const { outcome, sent } = await runAnalysis([
+    { kind: "nonsense" },
+    division(),
+    cohesive(5, "src/a.ts"),
+    cohesive(9, "src/b.ts"),
+  ]);
+
+  expect(outcome._tag).toBe("Right");
+  expect(sent).toHaveLength(4);
+  expect(sent[1]?.prompt).toContain("did not match the required answer");
+});
+
 test("unfixable responses exhaust the clarification bound and fail loudly", async () => {
   const { outcome } = await runAnalysis([
     division({

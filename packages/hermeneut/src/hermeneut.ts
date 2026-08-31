@@ -7,7 +7,12 @@ import {
 } from "@know-the-map/harness";
 import { Context, DateTime, Effect, Layer } from "effect";
 import { AnalysisBoundExceededError } from "./errors.ts";
-import { clarificationPrompt, SYSTEM_PROMPT, scopePrompt } from "./prompts.ts";
+import {
+  clarificationPrompt,
+  contractClarificationPrompt,
+  SYSTEM_PROMPT,
+  scopePrompt,
+} from "./prompts.ts";
 import type { AnalysisArtifact, Component, Interpretation, Relationship } from "./schemas.ts";
 import { LlmResponse } from "./schemas.ts";
 import { validateResponse } from "./validation.ts";
@@ -107,10 +112,27 @@ export const HermeneutLive: Layer.Layer<Hermeneut, never, Git | Harness> = Layer
           yield* Effect.logInfo(
             `harness call ${calls}/${MAX_HARNESS_CALLS}: scope of ${scopePaths.length} file(s)`,
           );
-          const response = yield* session.send({
-            prompt,
-            resultSchema: LlmResponse,
-          });
+          const response = yield* session
+            .send({
+              prompt,
+              resultSchema: LlmResponse,
+            })
+            .pipe(
+              // The session is still open: a payload that fails the answer
+              // contract is one more thing to clarify, not a dead run.
+              Effect.catchTag("InvalidResultError", (error) =>
+                Effect.succeed({ kind: "contract" as const, error }),
+              ),
+            );
+          if (response.kind === "contract") {
+            yield* Effect.logWarning("submit_result failed the answer contract; clarifying");
+            if (clarifications >= MAX_CLARIFICATIONS) {
+              return yield* response.error;
+            }
+            clarifications++;
+            prompt = contractClarificationPrompt({ reason: response.error.message });
+            continue;
+          }
           yield* Effect.logInfo(
             response.kind === "division"
               ? `division: ${response.components.length} component(s), ${response.relationships.length} relationship(s)`

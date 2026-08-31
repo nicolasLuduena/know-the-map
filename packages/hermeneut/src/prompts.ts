@@ -53,3 +53,14 @@ Your previous submit_result was rejected. Fix every issue below and resubmit
 the COMPLETE corrected answer via submit_result, same contract as before:
 
 ${args.issues.map((issue) => `- claim ${issue.id} (${issue.claim}): ${issue.reason}`).join("\n")}`;
+
+export const contractClarificationPrompt = (args: { readonly reason: string }): string =>
+  `## Clarification required
+
+Your previous submit_result payload did not match the required answer
+contract, so it could not be read at all. Resubmit the COMPLETE answer via
+submit_result, obeying the two-shape contract from your instructions exactly
+(no extra top-level fields, correct field names, integer ids and line
+numbers):
+
+${args.reason}`;

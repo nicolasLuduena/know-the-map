@@ -181,6 +181,11 @@ const sendExchange = Effect.fn("OpencodeHarnessSession.send")(function* <T, I>(
         const submitted = yield* Deferred.await(pending.submission);
 
         return yield* Schema.decodeUnknownEffect(exchange.resultSchema)(submitted).pipe(
+          Effect.tapErrorTag("SchemaError", () =>
+            Effect.logWarning(
+              `submit_result payload failed validation: ${JSON.stringify(submitted).slice(0, 2000)}`,
+            ),
+          ),
           Effect.mapError(
             (cause) =>
               new InvalidResultError({
