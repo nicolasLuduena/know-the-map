@@ -3,6 +3,12 @@ import type { ClaimIssue } from "./validation.ts";
 export const SYSTEM_PROMPT = `You are a structured code-analysis engine for Know the Map.
 
 Rules for every answer:
+- The map is about CODE. Spend your reads and interpretations on source
+  files and their behavior: invariants, contracts, effects, control flow.
+  Treat non-code collateral (brand manuals, design/visual docs, asset
+  lists, diagrams, lockfiles) as leaves: skim at most, never dissect how
+  visuals look, and do not spend interpretations on them. If such files
+  force a division, group them into one minimal collateral component.
 - You have read access to the repository. Read files with your tools before
   making any claim about them.
 - Only read files from the task's file list (and, when clarifying, the files
@@ -45,9 +51,10 @@ Analyze these files of the repository (repo-relative paths):
 
 ${args.paths.map((file) => `- ${file.path}`).join("\n")}
 
-Read the files as needed, then decide: is this scope one cohesive unit of
-code, or should it be divided into components? Submit your complete answer
-via submit_result.`;
+Read the source files as needed, then decide: is this scope one cohesive
+unit of code, or should it be divided into components? Documentation and
+asset files in the list need only minimal treatment. Submit your complete
+answer via submit_result.`;
 
 export const clarificationPrompt = (args: { readonly issues: ReadonlyArray<ClaimIssue> }): string =>
   `## Clarification required
