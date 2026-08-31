@@ -4,9 +4,10 @@ import { join } from "node:path";
 import { BunRuntime, BunServices } from "@effect/platform-bun";
 import { GitLive } from "@know-the-map/git";
 import { OpencodeHarnessLive } from "@know-the-map/harness-opencode";
-import { Hermeneut, HermeneutLive } from "@know-the-map/hermeneut";
-import { Console, Effect, Layer } from "effect";
+import { AnalysisArtifact, Hermeneut, HermeneutLive } from "@know-the-map/hermeneut";
+import { Console, Effect, Layer, Schema } from "effect";
 import { Command } from "effect/unstable/cli";
+import { renderVizHtml, VIZ_OUTPUT_PATH } from "./viz.ts";
 
 const VERSION = "0.0.0";
 const OUTPUT_PATH = join(".ktm", "analysis.json");
@@ -26,9 +27,26 @@ const analyze = Command.make("analyze", {}, () =>
   }),
 ).pipe(Command.withDescription("Analyze the repository in the current directory"));
 
+const viz = Command.make("viz", {}, () =>
+  Effect.gen(function* () {
+    const raw = yield* Effect.tryPromise(
+      () => Bun.file(OUTPUT_PATH).json() as Promise<unknown>,
+    ).pipe(Effect.orDie);
+    const artifact = yield* Schema.decodeUnknownEffect(AnalysisArtifact)(raw).pipe(Effect.orDie);
+    yield* Effect.tryPromise(() => Bun.write(VIZ_OUTPUT_PATH, renderVizHtml(artifact))).pipe(
+      Effect.orDie,
+    );
+    yield* Console.log(
+      `wrote ${VIZ_OUTPUT_PATH} (${artifact.components.length} components, ${
+        artifact.relationships.length
+      } relationships)`,
+    );
+  }),
+).pipe(Command.withDescription("Render the analysis artifact as a graph view (open in a browser)"));
+
 const cli = Command.make("ktm").pipe(
   Command.withDescription("Know the Map"),
-  Command.withSubcommands([analyze]),
+  Command.withSubcommands([analyze, viz]),
 );
 
 cli.pipe(
