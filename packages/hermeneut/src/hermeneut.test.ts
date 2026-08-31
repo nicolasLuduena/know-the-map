@@ -297,7 +297,7 @@ test("unfixable responses exhaust the clarification bound and fail loudly", asyn
 test("reaching the harness-call bound fails loudly", async () => {
   const script: Array<unknown> = [
     division({
-      components: Array.from({ length: 12 }, (_, index) => ({
+      components: Array.from({ length: 48 }, (_, index) => ({
         id: index + 1,
         name: `c${index}`,
         summary: "leaf",
@@ -306,15 +306,15 @@ test("reaching the harness-call bound fails loudly", async () => {
       relationships: [],
       interpretations: [],
     }),
-    ...Array.from({ length: 11 }, (_, index) => cohesive(20 + index, "src/a.ts")),
+    ...Array.from({ length: 47 }, (_, index) => cohesive(100 + index, "src/a.ts")),
   ];
   const { outcome, sent } = await runAnalysis(script);
 
   expect(outcome._tag).toBe("Left");
   if (outcome._tag !== "Left") return;
   expect(outcome.left).toBeInstanceOf(AnalysisBoundExceededError);
-  expect(outcome.left.message).toContain("12 harness calls");
-  expect(sent).toHaveLength(12);
+  expect(outcome.left.message).toContain("48 harness calls");
+  expect(sent).toHaveLength(48);
 });
 
 test("divisions nested beyond the max depth fail loudly", async () => {

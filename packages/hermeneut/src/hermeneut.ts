@@ -17,7 +17,7 @@ import type { AnalysisArtifact, Component, Interpretation, Relationship } from "
 import { LlmResponse } from "./schemas.ts";
 import { validateResponse } from "./validation.ts";
 
-const MAX_HARNESS_CALLS = 12;
+const MAX_HARNESS_CALLS = 48;
 const MAX_DEPTH = 3;
 const MAX_CLARIFICATIONS = 3;
 
