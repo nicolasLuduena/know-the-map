@@ -40,6 +40,15 @@ export const OPENCODE_CONFIG = {
     { action: "bash", resource: "*", effect: "deny" },
     { action: "webfetch", resource: "*", effect: "deny" },
     { action: "websearch", resource: "*", effect: "deny" },
+    // Nothing may block on user interaction or subagents: the host is
+    // embedded and headless.
+    { action: "question", resource: "*", effect: "deny" },
+    { action: "task", resource: "*", effect: "deny" },
+    // Reads are explicitly allowed so no path ever lands in "ask".
+    { action: "read", resource: "*", effect: "allow" },
+    { action: "grep", resource: "*", effect: "allow" },
+    { action: "glob", resource: "*", effect: "allow" },
+    { action: "list", resource: "*", effect: "allow" },
   ],
 } as const;
 

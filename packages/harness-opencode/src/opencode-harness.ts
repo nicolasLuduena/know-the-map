@@ -43,6 +43,9 @@ const BLOCKED_TOOLS = new Set([
   "websearch",
   "todowrite",
   "todoread",
+  "question",
+  "task",
+  "skill",
 ]);
 
 /** `Effect.timeout` fails with a tagged `TimeoutError`; the SDK's own errors
@@ -103,6 +106,7 @@ const submissionTool = (state: HostState) =>
             event.tools = Object.fromEntries(
               Object.entries(event.tools).filter(([name]) => !BLOCKED_TOOLS.has(name)),
             );
+            yield* Effect.logInfo(`session tools: ${Object.keys(event.tools).join(", ")}`);
           }),
         );
       }),
