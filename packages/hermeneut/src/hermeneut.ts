@@ -104,10 +104,18 @@ export const HermeneutLive: Layer.Layer<Hermeneut, never, Git | Harness> = Layer
             });
           }
           calls++;
+          yield* Effect.logInfo(
+            `harness call ${calls}/${MAX_HARNESS_CALLS}: scope of ${scopePaths.length} file(s)`,
+          );
           const response = yield* session.send({
             prompt,
             resultSchema: LlmResponse,
           });
+          yield* Effect.logInfo(
+            response.kind === "division"
+              ? `division: ${response.components.length} component(s), ${response.relationships.length} relationship(s)`
+              : "cohesive: scope analyzed",
+          );
           const issues = yield* validateResponse(response, {
             inventory,
             lineCount,

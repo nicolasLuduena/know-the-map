@@ -11,7 +11,7 @@ import {
 } from "@know-the-map/harness";
 import { Plugin } from "@opencode-ai/plugin/effect";
 import { Model, OpenCode, type Session, Tool } from "@opencode-ai/sdk/effect";
-import { Deferred, Effect, Layer, Option, Ref, Schema } from "effect";
+import { Deferred, Effect, Layer, Option, Predicate, Ref, Schema } from "effect";
 import {
   OPENCODE_CREATE_OPTIONS,
   OPENCODE_MODEL,
@@ -22,6 +22,32 @@ const SUBMIT_RESULT_DESCRIPTION =
   "Submit the structured result of the task. Call this exactly once with your final answer.";
 
 const MAX_GENERATION_TOKENS = 32_768;
+
+/**
+ * A single model turn (agent reading files, then submitting) must finish
+ * within this window or the exchange fails loudly instead of hanging.
+ */
+const TURN_TIMEOUT = "15 minutes";
+
+/**
+ * Tools the analyze session must never see: anything that could mutate the
+ * repository or reach the network. On top of this filter, the host config
+ * denies the corresponding permissions, so mutation is doubly blocked.
+ */
+const BLOCKED_TOOLS = new Set([
+  "bash",
+  "edit",
+  "write",
+  "patch",
+  "webfetch",
+  "websearch",
+  "todowrite",
+  "todoread",
+]);
+
+/** `Effect.timeout` fails with a tagged `TimeoutError`; the SDK's own errors
+ *  are not tagged, so discriminate manually. */
+const isTimeout = (cause: unknown): boolean => Predicate.isTagged(cause, "TimeoutError");
 
 /**
  * Permissive wire schema for `submit_result`: the harness applies the real
@@ -74,10 +100,9 @@ const submissionTool = (state: HostState) =>
               text: yield* Ref.get(state.systemPrompt),
             });
             event.generation.maxTokens = MAX_GENERATION_TOKENS;
-            const submit = event.tools["submit_result"];
-            if (submit !== undefined) {
-              event.tools = { submit_result: submit };
-            }
+            event.tools = Object.fromEntries(
+              Object.entries(event.tools).filter(([name]) => !BLOCKED_TOOLS.has(name)),
+            );
           }),
         );
       }),
@@ -115,18 +140,22 @@ const sendExchange = Effect.fn("OpencodeHarnessSession.send")(function* <T, I>(
             text: exchange.prompt,
           })
           .pipe(
-            Effect.mapError(
-              (cause) => new HostFailureError({ message: "sessions.prompt() failed", cause }),
+            Effect.timeout(TURN_TIMEOUT),
+            Effect.mapError((cause) =>
+              isTimeout(cause)
+                ? new HostFailureError({ message: "sessions.prompt() timed out" })
+                : new HostFailureError({ message: "sessions.prompt() failed", cause }),
             ),
           );
 
-        yield* pluginSession
-          .wait({ sessionID })
-          .pipe(
-            Effect.mapError(
-              (cause) => new HostFailureError({ message: "sessions.wait() failed", cause }),
-            ),
-          );
+        yield* pluginSession.wait({ sessionID }).pipe(
+          Effect.timeout(TURN_TIMEOUT),
+          Effect.mapError((cause) =>
+            isTimeout(cause)
+              ? new HostFailureError({ message: "sessions.wait() timed out" })
+              : new HostFailureError({ message: "sessions.wait() failed", cause }),
+          ),
+        );
 
         if (!(yield* Deferred.isDone(pending.submission))) {
           const exported = yield* opencode.sessions.export({ sessionID }).pipe(Effect.option);

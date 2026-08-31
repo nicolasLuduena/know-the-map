@@ -17,6 +17,18 @@
   "linter": {
     "enabled": true
   },
+  "overrides": [
+    {
+      "includes": ["packages/harness-opencode/**/*.ts"],
+      "linter": {
+        "rules": {
+          "complexity": {
+            "useLiteralKeys": "off"
+          }
+        }
+      }
+    }
+  ],
   "assist": {
     "enabled": true
   }
