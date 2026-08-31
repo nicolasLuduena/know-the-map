@@ -1,7 +1,14 @@
-export { NotImplementedError } from "./errors.ts";
-export type { HarnessError } from "./harness.ts";
-export { Harness, HarnessStub } from "./harness.ts";
 export {
-  HarnessRequest,
-  HarnessResult,
-} from "./protocol.ts";
+  HostFailureError,
+  InvalidResultError,
+  MissingApiKeyError,
+  NoSubmissionError,
+  NotImplementedError,
+} from "./errors.ts";
+export type {
+  HarnessError,
+  HarnessExchange,
+  HarnessSession,
+  HarnessSessionConfig,
+} from "./harness.ts";
+export { Harness, HarnessStub } from "./harness.ts";

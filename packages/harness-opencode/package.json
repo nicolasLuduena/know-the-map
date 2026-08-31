@@ -8,6 +8,8 @@
   },
   "dependencies": {
     "@know-the-map/harness": "workspace:*",
+    "@opencode-ai/plugin": "catalog:",
+    "@opencode-ai/sdk": "catalog:",
     "effect": "catalog:"
   }
 }
