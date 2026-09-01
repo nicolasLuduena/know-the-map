@@ -219,7 +219,7 @@ export const HermeneutLive: Layer.Layer<Hermeneut, never, Git | Harness> = Layer
         (session) =>
           Effect.gen(function* () {
             yield* visit(session, [...inventory.keys()], 0);
-            const generatedAt = DateTime.formatIso(yield* DateTime.now);
+            const generatedAt = yield* DateTime.now;
             return {
               headCommit: repo.headCommit,
               generatedAt,

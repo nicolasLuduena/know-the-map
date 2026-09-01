@@ -32,7 +32,10 @@ Answer with exactly one of two shapes:
 {"kind":"cohesive","summary":"...","interpretations":[...]}
 
 Components list the repo-relative files that make them up. Relationship
-"from"/"to" are component names present in the same answer. Interpretations
+"from"/"to" are component names present in the same answer. Relationship
+"kind" is one of: uses, calls, reads, writes, other. When relationship kind is
+"other", also set "customKind" to a short snake_case label; otherwise omit
+"customKind". Interpretations
 capture how the code works and how components are strung together; each is:
 {"id":3,"kind":"invariant","text":"...","anchors":[{"path":"...","lineStart":1,"lineEnd":2}]}
 "kind" is one of: invariant, precondition, postcondition, effect, role, other.

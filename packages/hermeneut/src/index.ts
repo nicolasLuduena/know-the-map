@@ -13,6 +13,7 @@ export {
   LlmResponse,
   PositiveInt,
   Relationship,
+  RelationshipKind,
 } from "./schemas.ts";
 export type { ClaimIssue, ValidationContext } from "./validation.ts";
 export { validateResponse } from "./validation.ts";

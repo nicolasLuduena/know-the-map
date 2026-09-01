@@ -33,6 +33,18 @@ pass.
 - Comments only when a function carries context nuance or crosses a
   complexity threshold. Keep them compact: explain the why, not the what.
 
+## Schemas
+
+- Always be strict in the types: prefer literals/unions over bare strings
+  and numbers, and narrow with checks (`PositiveInt`) over accepting any
+  value. Only loosen when there is a concrete reason (e.g. open-ended model
+  output uses a literal union with an `"other"` + `customKind` escape
+  hatch).
+- Every field of every structure gets a comment explaining what it means.
+  For Effect Schemas this is `.annotate({ description: "..." })` on each
+  field, not a TS comment — descriptions flow into error messages and
+  generated JSON schemas.
+
 ## Effect
 
 - `Effect.gen` / `Effect.fn` with combinators in `.pipe` (see `AGENTS.md`).
