@@ -38,62 +38,16 @@ export class Git extends Context.Service<
 
 export type GitError = RepoNotFoundError | DirtyTreeError | GitCommandError;
 
-/** C escapes git may emit inside a quoted path, beyond `\"` and `\\`. */
-const C_ESCAPES: Readonly<Record<string, number>> = {
-  a: 7,
-  b: 8,
-  f: 12,
-  n: 10,
-  r: 13,
-  t: 9,
-  v: 11,
-};
-
 /**
- * Plumbing output quotes paths containing control bytes or — under git's
- * default `core.quotePath=true` — non-ASCII ones: the path's raw UTF-8 bytes
- * come back as octal `\ooo` escapes inside double quotes
- * (e.g. `"caf\303\251.ts"`). JSON.parse cannot be used: octal escapes are
- * invalid JSON and throw. Decode the byte escapes and reinterpret them as
- * UTF-8. Without this, a real file lands in the inventory under a ghost
- * path (or crashes) and the anti-hallucination oracle rejects it.
+ * Fields of git's `-z` output: NUL-terminated, paths raw and unquoted. We
+ * ask for `-z` everywhere paths cross this boundary because it is git's
+ * only scripting-safe interface: any valid filename — unicode, spaces,
+ * quotes, even newlines — survives verbatim, while the plain-text output
+ * would mangle them into quoted escapes an octal decoder could only
+ * guess at. The trailing NUL makes a naive split invent an empty field, so
+ * drop empties: `resolve()` counts these fields to decide dirty/clean.
  */
-const unquote = (path: string): string => {
-  if (!(path.startsWith('"') && path.endsWith('"'))) {
-    return path;
-  }
-  const body = path.slice(1, -1);
-  const at = (index: number): string => body[index] ?? "";
-  const isDigit = (c: string): boolean => c >= "0" && c <= "7";
-  const bytes: Array<number> = [];
-  for (let i = 0; i < body.length; i++) {
-    const ch = at(i);
-    if (ch !== "\\") {
-      bytes.push(ch.charCodeAt(0));
-      continue;
-    }
-    const esc = at(++i);
-    if (isDigit(esc)) {
-      let value = esc.charCodeAt(0) - 48;
-      for (let digits = 1; digits < 3 && isDigit(at(i + 1)); digits++) {
-        i++;
-        value = value * 8 + (at(i).charCodeAt(0) - 48);
-      }
-      bytes.push(value);
-    } else {
-      bytes.push(C_ESCAPES[esc] ?? esc.charCodeAt(0));
-    }
-  }
-  return new TextDecoder().decode(Uint8Array.from(bytes));
-};
-
-/**
- * Git commands terminate output with a newline, so a naive split invents a
- * trailing empty entry — load-bearing for `resolve()`, which decides
- * dirty/clean by counting the entries of `status --porcelain`.
- */
-const trimEmptyLines = (out: string): Array<string> =>
-  out.split("\n").filter((line) => line.length > 0);
+const zFields = (out: string): Array<string> => out.split("\0").filter((field) => field.length > 0);
 
 /** The blob id of empty content. */
 const EMPTY_BLOB = "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391";
@@ -188,14 +142,14 @@ export const GitLive: Layer.Layer<Git, never, ChildProcessSpawner.ChildProcessSp
         }
         const headCommit = head.stdout.trim();
 
-        const status = yield* run("git", ["status", "--porcelain"], root);
+        const status = yield* run("git", ["status", "--porcelain", "-z"], root);
         if (status.exitCode !== 0) {
           return yield* new GitCommandError({
-            message: "git status --porcelain failed",
+            message: "git status --porcelain -z failed",
             cause: new Error(status.stderr.trim()),
           });
         }
-        const entries = trimEmptyLines(status.stdout);
+        const entries = zFields(status.stdout);
         if (entries.length > 0) {
           return yield* new DirtyTreeError({
             message: `worktree at "${root}" is dirty; commit or stash before analyzing`,
@@ -207,20 +161,20 @@ export const GitLive: Layer.Layer<Git, never, ChildProcessSpawner.ChildProcessSp
       });
 
       const inventory = Effect.fn("Git.inventory")(function* (root: string) {
-        const staged = yield* run("git", ["ls-files", "-s"], root);
-        const stdout = yield* expectSuccess("git", ["ls-files", "-s"], staged);
+        const staged = yield* run("git", ["ls-files", "-s", "-z"], root);
+        const stdout = yield* expectSuccess("git", ["ls-files", "-s", "-z"], staged);
         const entries: Array<InventoryEntry> = [];
-        for (const line of trimEmptyLines(stdout)) {
-          // Format: `<mode> <object> <stage>\t<path>`; only the path may
-          // contain whitespace, so split on the tab, never on the spaces.
-          const tab = line.indexOf("\t");
-          const meta = tab === -1 ? [] : line.slice(0, tab).split(" ");
+        for (const record of zFields(stdout)) {
+          // Format: `<mode> <object> <stage>\t<path>`; the tab is the only
+          // boundary before the path, which may then hold any byte but NUL.
+          const tab = record.indexOf("\t");
+          const meta = tab === -1 ? [] : record.slice(0, tab).split(" ");
           const hash = meta[1];
-          const path = tab === -1 ? "" : unquote(line.slice(tab + 1));
+          const path = tab === -1 ? "" : record.slice(tab + 1);
           if (hash === undefined || path.length === 0) {
             return yield* new GitCommandError({
-              message: `could not parse ls-files line: ${JSON.stringify(line)}`,
-              cause: new Error(line),
+              message: `could not parse ls-files record: ${JSON.stringify(record)}`,
+              cause: new Error(record),
             });
           }
           entries.push({
@@ -229,14 +183,17 @@ export const GitLive: Layer.Layer<Git, never, ChildProcessSpawner.ChildProcessSp
           });
         }
 
-        const others = yield* run("git", ["ls-files", "--others", "--exclude-standard"], root);
+        const others = yield* run(
+          "git",
+          ["ls-files", "--others", "--exclude-standard", "-z"],
+          root,
+        );
         const othersStdout = yield* expectSuccess(
           "git",
-          ["ls-files", "--others", "--exclude-standard"],
+          ["ls-files", "--others", "--exclude-standard", "-z"],
           others,
         );
-        // `--others` quotes paths the same way, so it needs the same unquote.
-        for (const path of trimEmptyLines(othersStdout).map(unquote)) {
+        for (const path of zFields(othersStdout)) {
           entries.push({ path, hash: yield* hashObject(root, path) });
         }
 

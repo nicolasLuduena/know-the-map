@@ -146,17 +146,18 @@ test("inventory lists tracked files with content hashes", async () => {
   }
 });
 
-test("inventory unescapes quoted paths and preserves whitespace in unquoted ones", async () => {
+test("inventory keeps awkward filenames verbatim, even with git path quoting on", async () => {
   const { dir, cleanup } = makeRepo();
   try {
-    // Force git's path quoting on regardless of the developer's global config.
+    // Force git's C-style quoting on: with `-z` it must not touch the paths.
     git(["config", "core.quotePath", "true"], dir);
     writeFileSync(join(dir, "café.ts"), "x\n");
     writeFileSync(join(dir, "two  spaces.ts"), "y\n");
     writeFileSync(join(dir, 'we"ird.ts'), "z\n");
+    writeFileSync(join(dir, "line\nbreak.ts"), "w\n"); // -z's raison d'être
     git(["add", "."], dir);
     git(["-c", "user.email=test@test", "-c", "user.name=test", "commit", "-m", "odd names"], dir);
-    writeFileSync(join(dir, "naïve.ts"), "w\n"); // untracked: quoted too
+    writeFileSync(join(dir, "naïve.ts"), "v\n"); // untracked: raw through too
 
     const outcome = await run(
       Effect.gen(function* () {
@@ -167,7 +168,13 @@ test("inventory unescapes quoted paths and preserves whitespace in unquoted ones
     expect(outcome?.ok).toBe(true);
     if (outcome?.ok) {
       const paths = outcome.value.map((entry) => entry.path).sort();
-      expect(paths).toEqual(["café.ts", "naïve.ts", "two  spaces.ts", 'we"ird.ts']);
+      expect(paths).toEqual([
+        "café.ts",
+        "line\nbreak.ts",
+        "naïve.ts",
+        "two  spaces.ts",
+        'we"ird.ts',
+      ]);
       const byPath = new Map(outcome.value.map((entry) => [entry.path, entry]));
       expect(byPath.get("café.ts")?.hash).toBe(git(["hash-object", "café.ts"], dir).stdout.trim());
       expect(byPath.get("naïve.ts")?.hash).toBe(
