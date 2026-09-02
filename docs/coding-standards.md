@@ -1,61 +1,43 @@
 # Coding standards
 
-Living document — updated whenever a preference is settled or disgusting code
-gets corrected. Read it completely before writing TypeScript here.
-
 ## Fail loudly
 
-Never hide errors. No silent defaults, no placeholder success, no swallowed
-rejections. Undesigned code fails with `NotImplementedError` from
-`@know-the-map/harness`. A loud failure beats a silent wrong answer.
-
-This includes catch-alls: do not add blanket fallbacks (`Effect.catch`,
-broad `try/catch`) "just in case". Handle exactly the tagged errors the
-channel declares; let anything unexpected crash loudly instead of turning
-into a generic "unexpected failure" message.
+No silent defaults, placeholder success, or swallowed rejections; a loud
+failure beats a silent wrong answer. Undesigned code fails with
+`NotImplementedError` from `@know-the-map/harness`. No blanket fallbacks
+(`Effect.catch`, broad `try/catch`) "just in case" — handle exactly the
+tagged errors a channel declares; let the unexpected crash.
 
 ## Preconditions
 
-When Effect Schema or the type system cannot guarantee a precondition, assert
-it explicitly at the function boundary. Functions defend their assumptions
-instead of trusting callers — this keeps coupling loose and failures local.
+When types or Schema can't guarantee a precondition, assert it at the
+function boundary. Functions defend assumptions instead of trusting callers:
+loose coupling, local failures.
 
 ## Gates
 
-`bun run check` · `bun run typecheck` · `bun test packages apps` — all must
-pass.
+`bun run check` · `bun run typecheck` · `bun test packages apps` — all must pass.
 
 ## TypeScript
 
-- `verbatimModuleSyntax`: `export type` / `import type` for type-only usage.
-- `.ts` extensions in relative imports.
-- Guards over `!` non-null assertions.
-- Comments only when a function carries context nuance or crosses a
-  complexity threshold. Keep them compact: explain the why, not the what.
+`verbatimModuleSyntax`; `.ts` extensions in relative imports; guards over `!`.
+Comments only for nuance or complexity — the why, not the what.
 
 ## Schemas
 
-- Always be strict in the types: prefer literals/unions over bare strings
-  and numbers, and narrow with checks (`PositiveInt`) over accepting any
-  value. Only loosen when there is a concrete reason (e.g. open-ended model
-  output uses a literal union with an `"other"` + `customKind` escape
-  hatch).
-- Every field of every structure gets a comment explaining what it means.
-  For Effect Schemas this is `.annotate({ description: "..." })` on each
-  field, not a TS comment — descriptions flow into error messages and
-  generated JSON schemas.
+Strict types: literals/unions over bare strings/numbers, narrow checks
+(`PositiveInt`) over accepting anything. Every field documents itself via
+`.annotate({ description })`, not TS comments — descriptions flow into error
+messages and generated JSON schemas.
 
 ## Effect
 
-- `Effect.gen` / `Effect.fn` with combinators in `.pipe` (see `AGENTS.md`).
-- Services: `Context.Service` + static `Layer`. Errors: `Schema.TaggedError`.
-- Keep errors typed; no `Exit`/`flip` gymnastics. Cross to imperative land
-  once: `Effect.as(0)` *before* the `Effect.catchTag` handlers that report
-  and return the exit code, then one `Effect.runPromise`.
+`Effect.gen`/`Effect.fn`, combinators in `.pipe` (per the Effect skill — load
+it before writing Effect code). Services: `Context.Service` + static `Layer`;
+errors: `Schema.TaggedError`. Keep errors typed — no `Exit`/`flip` gymnastics.
 
 ## Monorepo
 
-- `catalog:` for shared versions, `workspace:*` for internal packages,
-  `@know-the-map/*` scope; `packages/*` for libraries, `apps/*` for
-  executables.
-- `harness-probe/` is reference-only; transplant ideas, never import.
+`catalog:` shared versions, `workspace:*` internal, `@know-the-map/*` scope;
+`packages/*` libs, `apps/*` executables. `harness-probe/` reference-only:
+transplant, never import.
