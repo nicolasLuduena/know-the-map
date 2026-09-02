@@ -38,12 +38,75 @@ export class Git extends Context.Service<
 
 export type GitError = RepoNotFoundError | DirtyTreeError | GitCommandError;
 
-const unquote = (path: string): string =>
-  path.startsWith('"') && path.endsWith('"') ? (JSON.parse(path) as string) : path;
+/** C escapes git may emit inside a quoted path, beyond `\"` and `\\`. */
+const C_ESCAPES: Readonly<Record<string, number>> = {
+  a: 7,
+  b: 8,
+  f: 12,
+  n: 10,
+  r: 13,
+  t: 9,
+  v: 11,
+};
 
-const lines = (out: string): Array<string> => out.split("\n").filter((line) => line.length > 0);
+/**
+ * Plumbing output quotes paths containing control bytes or — under git's
+ * default `core.quotePath=true` — non-ASCII ones: the path's raw UTF-8 bytes
+ * come back as octal `\ooo` escapes inside double quotes
+ * (e.g. `"caf\303\251.ts"`). JSON.parse cannot be used: octal escapes are
+ * invalid JSON and throw. Decode the byte escapes and reinterpret them as
+ * UTF-8. Without this, a real file lands in the inventory under a ghost
+ * path (or crashes) and the anti-hallucination oracle rejects it.
+ */
+const unquote = (path: string): string => {
+  if (!(path.startsWith('"') && path.endsWith('"'))) {
+    return path;
+  }
+  const body = path.slice(1, -1);
+  const at = (index: number): string => body[index] ?? "";
+  const isDigit = (c: string): boolean => c >= "0" && c <= "7";
+  const bytes: Array<number> = [];
+  for (let i = 0; i < body.length; i++) {
+    const ch = at(i);
+    if (ch !== "\\") {
+      bytes.push(ch.charCodeAt(0));
+      continue;
+    }
+    const esc = at(++i);
+    if (isDigit(esc)) {
+      let value = esc.charCodeAt(0) - 48;
+      for (let digits = 1; digits < 3 && isDigit(at(i + 1)); digits++) {
+        i++;
+        value = value * 8 + (at(i).charCodeAt(0) - 48);
+      }
+      bytes.push(value);
+    } else {
+      bytes.push(C_ESCAPES[esc] ?? esc.charCodeAt(0));
+    }
+  }
+  return new TextDecoder().decode(Uint8Array.from(bytes));
+};
 
-const stripHash = (hash: string): string => (/^0+$/.test(hash) ? "" : hash);
+/**
+ * Git commands terminate output with a newline, so a naive split invents a
+ * trailing empty entry — load-bearing for `resolve()`, which decides
+ * dirty/clean by counting the entries of `status --porcelain`.
+ */
+const trimEmptyLines = (out: string): Array<string> =>
+  out.split("\n").filter((line) => line.length > 0);
+
+/** The blob id of empty content. */
+const EMPTY_BLOB = "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391";
+
+/**
+ * Index hashes that id no actual content: a null OID (all zeros) or — what
+ * modern git's `git add -N` (intent-to-add) records for a path whose
+ * worktree content was never staged — the empty blob. Recompute those from
+ * the worktree; a genuinely empty file just rehashes to the same value.
+ * `inventory()` does not assume `resolve()` ran first, so it defends this
+ * itself.
+ */
+const isPlaceholderOid = (hash: string): boolean => /^0+$/.test(hash) || hash === EMPTY_BLOB;
 
 export const GitLive: Layer.Layer<Git, never, ChildProcessSpawner.ChildProcessSpawner> =
   Layer.effect(
@@ -132,7 +195,7 @@ export const GitLive: Layer.Layer<Git, never, ChildProcessSpawner.ChildProcessSp
             cause: new Error(status.stderr.trim()),
           });
         }
-        const entries = lines(status.stdout);
+        const entries = trimEmptyLines(status.stdout);
         if (entries.length > 0) {
           return yield* new DirtyTreeError({
             message: `worktree at "${root}" is dirty; commit or stash before analyzing`,
@@ -147,20 +210,22 @@ export const GitLive: Layer.Layer<Git, never, ChildProcessSpawner.ChildProcessSp
         const staged = yield* run("git", ["ls-files", "-s"], root);
         const stdout = yield* expectSuccess("git", ["ls-files", "-s"], staged);
         const entries: Array<InventoryEntry> = [];
-        for (const line of lines(stdout)) {
-          const tokens = line.split(/\s+/);
-          const hash = tokens[1];
-          const path = unquote(tokens.slice(3).join(" "));
+        for (const line of trimEmptyLines(stdout)) {
+          // Format: `<mode> <object> <stage>\t<path>`; only the path may
+          // contain whitespace, so split on the tab, never on the spaces.
+          const tab = line.indexOf("\t");
+          const meta = tab === -1 ? [] : line.slice(0, tab).split(" ");
+          const hash = meta[1];
+          const path = tab === -1 ? "" : unquote(line.slice(tab + 1));
           if (hash === undefined || path.length === 0) {
             return yield* new GitCommandError({
               message: `could not parse ls-files line: ${JSON.stringify(line)}`,
               cause: new Error(line),
             });
           }
-          const cleanHash = stripHash(hash);
           entries.push({
             path,
-            hash: cleanHash.length > 0 ? cleanHash : yield* hashObject(root, path),
+            hash: isPlaceholderOid(hash) ? yield* hashObject(root, path) : hash,
           });
         }
 
@@ -170,7 +235,8 @@ export const GitLive: Layer.Layer<Git, never, ChildProcessSpawner.ChildProcessSp
           ["ls-files", "--others", "--exclude-standard"],
           others,
         );
-        for (const path of lines(othersStdout)) {
+        // `--others` quotes paths the same way, so it needs the same unquote.
+        for (const path of trimEmptyLines(othersStdout).map(unquote)) {
           entries.push({ path, hash: yield* hashObject(root, path) });
         }
 

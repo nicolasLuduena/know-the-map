@@ -146,6 +146,69 @@ test("inventory lists tracked files with content hashes", async () => {
   }
 });
 
+test("inventory unescapes quoted paths and preserves whitespace in unquoted ones", async () => {
+  const { dir, cleanup } = makeRepo();
+  try {
+    // Force git's path quoting on regardless of the developer's global config.
+    git(["config", "core.quotePath", "true"], dir);
+    writeFileSync(join(dir, "café.ts"), "x\n");
+    writeFileSync(join(dir, "two  spaces.ts"), "y\n");
+    writeFileSync(join(dir, 'we"ird.ts'), "z\n");
+    git(["add", "."], dir);
+    git(["-c", "user.email=test@test", "-c", "user.name=test", "commit", "-m", "odd names"], dir);
+    writeFileSync(join(dir, "naïve.ts"), "w\n"); // untracked: quoted too
+
+    const outcome = await run(
+      Effect.gen(function* () {
+        const gitService = yield* Git;
+        return yield* gitService.inventory(dir);
+      }),
+    );
+    expect(outcome?.ok).toBe(true);
+    if (outcome?.ok) {
+      const paths = outcome.value.map((entry) => entry.path).sort();
+      expect(paths).toEqual(["café.ts", "naïve.ts", "two  spaces.ts", 'we"ird.ts']);
+      const byPath = new Map(outcome.value.map((entry) => [entry.path, entry]));
+      expect(byPath.get("café.ts")?.hash).toBe(git(["hash-object", "café.ts"], dir).stdout.trim());
+      expect(byPath.get("naïve.ts")?.hash).toBe(
+        git(["hash-object", "naïve.ts"], dir).stdout.trim(),
+      );
+    }
+  } finally {
+    cleanup();
+  }
+});
+
+test("inventory recomputes placeholder hashes (intent-to-add)", async () => {
+  const { dir, cleanup } = makeRepo();
+  try {
+    writeFileSync(join(dir, "a.ts"), "one\n");
+    git(["add", "."], dir);
+    git(["-c", "user.email=test@test", "-c", "user.name=test", "commit", "-m", "a"], dir);
+    writeFileSync(join(dir, "new.ts"), "brand new\n");
+    git(["add", "-N", "new.ts"], dir); // the index records the empty blob for new.ts
+    writeFileSync(join(dir, "empty.ts"), "");
+    git(["add", "empty.ts"], dir);
+
+    const outcome = await run(
+      Effect.gen(function* () {
+        const gitService = yield* Git;
+        return yield* gitService.inventory(dir);
+      }),
+    );
+    expect(outcome?.ok).toBe(true);
+    if (outcome?.ok) {
+      const byPath = new Map(outcome.value.map((entry) => [entry.path, entry]));
+      expect(byPath.get("new.ts")?.hash).toBe(git(["hash-object", "new.ts"], dir).stdout.trim());
+      expect(byPath.get("new.ts")?.hash).not.toBe("e69de29bb2d1d6434b8b29ae775ad8c2e48c5391");
+      // a genuinely empty file keeps its (legitimately empty) blob id
+      expect(byPath.get("empty.ts")?.hash).toBe("e69de29bb2d1d6434b8b29ae775ad8c2e48c5391");
+    }
+  } finally {
+    cleanup();
+  }
+});
+
 test("lineCount counts the trailing unterminated line", async () => {
   const { dir, cleanup } = makeRepo();
   try {
