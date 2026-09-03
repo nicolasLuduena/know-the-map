@@ -194,9 +194,10 @@ export const HermeneutLive: Layer.Layer<Hermeneut, never, Git | Harness> = Layer
         const files: Array<FileStatus> = [];
         for (const path of [...referenced].sort()) {
           const entry = inventory.get(path);
-          // Defense in depth: component files and anchors are validated
-          // against the inventory, but scope paths enter `referenced`
-          // before any claim validation has run over them.
+          // Defense in depth: every path reaching `referenced` comes from
+          // the inventory itself or from a claim that passed schema and
+          // oracle validation, so a miss here means that invariant broke
+          // elsewhere — fail loudly instead of emitting a bad artifact.
           if (entry === undefined) {
             return yield* new InvalidResultError({
               message: `file "${path}" is referenced but missing from the inventory`,
