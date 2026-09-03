@@ -87,7 +87,7 @@ const runAnalysis = async (script: ReadonlyArray<unknown>) => {
   const sent: Array<{ prompt: string; payload: unknown }> = [];
   const program = Effect.gen(function* () {
     const hermeneut = yield* Hermeneut;
-    return yield* hermeneut.analyze();
+    return yield* hermeneut.analyze(".");
   }).pipe(
     Effect.provide(
       HermeneutLive.pipe(Layer.provide(MockGit), Layer.provide(scriptHarness(script, sent))),
@@ -133,23 +133,23 @@ const division = (
   interpretations: overrides.interpretations ?? [interpretation(4, "src/a.ts", 1, 3)],
 });
 
-const cohesive = (
+const module = (
   id: number,
   path: string,
   interpretations: ReadonlyArray<unknown> = [interpretation(id, path, 1, 2)],
 ) => ({
-  kind: "cohesive",
+  kind: "module",
   summary: `unit ${path}`,
   interpretations,
 });
 
-test("happy path: division then cohesive analyses produce the artifact", async () => {
+test("happy path: division then module analyses produce the artifact", async () => {
   const { outcome, sent } = await runAnalysis([
     division(),
-    cohesive(5, "src/a.ts", [
+    module(5, "src/a.ts", [
       interpretation(6, "src/a.ts", 5, 5, { kind: "other", customKind: "heuristic" }),
     ]),
-    cohesive(7, "src/b.ts", [
+    module(7, "src/b.ts", [
       interpretation(8, "src/b.ts", 1, 2, { kind: "effect", text: "writes to stdout" }),
     ]),
   ]);
@@ -178,8 +178,8 @@ test("hallucinated file path triggers a clarification, then the run recovers", a
       ],
     }),
     division(),
-    cohesive(5, "src/a.ts"),
-    cohesive(9, "src/b.ts"),
+    module(5, "src/a.ts"),
+    module(9, "src/b.ts"),
   ]);
 
   expect(outcome._tag).toBe("Right");
@@ -195,8 +195,8 @@ test("line range past the end of the file triggers a clarification", async () =>
       interpretations: [interpretation(4, "src/a.ts", 1, 11)],
     }),
     division(),
-    cohesive(5, "src/a.ts"),
-    cohesive(9, "src/b.ts"),
+    module(5, "src/a.ts"),
+    module(9, "src/b.ts"),
   ]);
 
   expect(outcome._tag).toBe("Right");
@@ -209,15 +209,15 @@ test("relationship with an unknown endpoint triggers a clarification", async () 
       relationships: [{ id: 3, from: "alpha", to: "ghost", kind: "uses", description: "made up" }],
     }),
     division(),
-    cohesive(5, "src/a.ts"),
-    cohesive(9, "src/b.ts"),
+    module(5, "src/a.ts"),
+    module(9, "src/b.ts"),
   ]);
 
   expect(outcome._tag).toBe("Right");
   expect(sent[1]?.prompt).toContain('"ghost" is not a component');
 });
 
-test("duplicated ids (within a response and across exchanges) trigger clarifications", async () => {
+test("duplicated ids within a response trigger a contract clarification", async () => {
   const { outcome, sent } = await runAnalysis([
     division({
       components: [
@@ -226,25 +226,23 @@ test("duplicated ids (within a response and across exchanges) trigger clarificat
       ],
     }),
     division(),
-    cohesive(2, "src/a.ts"),
-    cohesive(10, "src/a.ts"),
-    cohesive(11, "src/b.ts"),
+    module(2, "src/a.ts"),
+    module(2, "src/b.ts"),
   ]);
 
   expect(outcome._tag).toBe("Right");
-  expect(sent[1]?.prompt).toContain("id 1 is not unique");
-  expect(sent[3]?.prompt).toContain("id 2 is not unique");
-  expect(sent).toHaveLength(5);
+  expect(sent).toHaveLength(4);
+  expect(sent[1]?.prompt).toContain("not unique within this answer");
 });
 
 test(`kind "other" without customKind triggers a clarification`, async () => {
   const { outcome, sent } = await runAnalysis([
     division(),
-    cohesive(5, "src/a.ts", [interpretation(6, "src/a.ts", 5, 5, { kind: "other" })]),
-    cohesive(6, "src/a.ts", [
+    module(5, "src/a.ts", [interpretation(6, "src/a.ts", 5, 5, { kind: "other" })]),
+    module(6, "src/a.ts", [
       interpretation(6, "src/a.ts", 5, 5, { kind: "other", customKind: "heuristic" }),
     ]),
-    cohesive(9, "src/b.ts"),
+    module(9, "src/b.ts"),
   ]);
 
   expect(outcome._tag).toBe("Right");
@@ -255,8 +253,8 @@ test("a payload that fails the answer contract triggers a clarification, then th
   const { outcome, sent } = await runAnalysis([
     { kind: "nonsense" },
     division(),
-    cohesive(5, "src/a.ts"),
-    cohesive(9, "src/b.ts"),
+    module(5, "src/a.ts"),
+    module(9, "src/b.ts"),
   ]);
 
   expect(outcome._tag).toBe("Right");
@@ -306,14 +304,14 @@ test("reaching the harness-call bound fails loudly", async () => {
       relationships: [],
       interpretations: [],
     }),
-    ...Array.from({ length: 47 }, (_, index) => cohesive(100 + index, "src/a.ts")),
+    ...Array.from({ length: 47 }, (_, index) => module(100 + index, "src/a.ts")),
   ];
   const { outcome, sent } = await runAnalysis(script);
 
   expect(outcome._tag).toBe("Left");
   if (outcome._tag !== "Left") return;
   expect(outcome.left).toBeInstanceOf(AnalysisBoundExceededError);
-  expect(outcome.left.message).toContain("48 harness calls");
+  expect(outcome.left.message).toContain("48 model calls");
   expect(sent).toHaveLength(48);
 });
 

@@ -13,10 +13,17 @@ import {
   SYSTEM_PROMPT,
   scopePrompt,
 } from "./prompts.ts";
-import type { AnalysisArtifact, Component, Interpretation, Relationship } from "./schemas.ts";
+import type {
+  AnalysisArtifact,
+  Component,
+  FileStatus,
+  Interpretation,
+  Relationship,
+} from "./schemas.ts";
 import { LlmResponse } from "./schemas.ts";
 import { validateResponse } from "./validation.ts";
 
+// TODO(config): every bound below should come from the run configuration.
 const MAX_HARNESS_CALLS = 48;
 const MAX_DEPTH = 3;
 const MAX_CLARIFICATIONS = 3;
@@ -36,11 +43,11 @@ export class Hermeneut extends Context.Service<
   Hermeneut,
   {
     /**
-     * Analyze the repository containing the current working directory:
-     * recursive component division plus line-anchored interpretations,
-     * ending in a persisted-ready artifact.
+     * Analyze the repository containing `directory`: recursive component
+     * division plus line-anchored interpretations, ending in a
+     * persisted-ready artifact.
      */
-    analyze(): Effect.Effect<AnalysisArtifact, AnalyzeError>;
+    analyze(directory: string): Effect.Effect<AnalysisArtifact, AnalyzeError>;
   }
 >()("@know-the-map/hermeneut/Hermeneut") {}
 
@@ -50,11 +57,10 @@ export const HermeneutLive: Layer.Layer<Hermeneut, never, Git | Harness> = Layer
     const git = yield* Git;
     const harness = yield* Harness;
 
-    const analyze = Effect.fn("Hermeneut.analyze")(function* (): Effect.fn.Return<
-      AnalysisArtifact,
-      AnalyzeError
-    > {
-      const repo = yield* git.resolve(".");
+    const analyze = Effect.fn("Hermeneut.analyze")(function* (
+      directory: string,
+    ): Effect.fn.Return<AnalysisArtifact, AnalyzeError> {
+      const repo = yield* git.resolve(directory);
       const entries = yield* git.inventory(repo.root);
       const inventory = new Map(entries.map((entry) => [entry.path, entry]));
       const lineCounts = new Map<string, number>();
@@ -69,48 +75,29 @@ export const HermeneutLive: Layer.Layer<Hermeneut, never, Git | Harness> = Layer
           return count;
         });
 
-      const seenIds = new Set<number>();
       const components: Array<Component> = [];
       const relationships: Array<Relationship> = [];
       const interpretations: Array<Interpretation> = [];
       const referenced = new Set<string>();
       let calls = 0;
 
-      const rememberIds = (response: LlmResponse) => {
-        if (response.kind === "cohesive") {
-          for (const interpretation of response.interpretations) {
-            seenIds.add(interpretation.id);
-          }
-          return;
-        }
-        for (const component of response.components) {
-          seenIds.add(component.id);
-        }
-        for (const relationship of response.relationships) {
-          seenIds.add(relationship.id);
-        }
-        for (const interpretation of response.interpretations) {
-          seenIds.add(interpretation.id);
-        }
-      };
-
       const exchange = Effect.fn("Hermeneut.exchange")(function* (
         session: HarnessSession,
         scopePaths: ReadonlyArray<string>,
       ): Effect.fn.Return<LlmResponse, AnalyzeError> {
-        let prompt = scopePrompt({
-          paths: scopePaths.map((path) => ({ path })),
-        });
+        let prompt = scopePrompt(scopePaths);
         let clarifications = 0;
         while (true) {
           if (calls >= MAX_HARNESS_CALLS) {
+            // TODO(ux): before giving up, offer to continue and report the
+            // cost the sessions have accumulated — tracked as an issue.
             return yield* new AnalysisBoundExceededError({
-              message: `analysis exceeded ${MAX_HARNESS_CALLS} harness calls`,
+              message: `analysis stopped after ${MAX_HARNESS_CALLS} model calls`,
             });
           }
           calls++;
           yield* Effect.logInfo(
-            `harness call ${calls}/${MAX_HARNESS_CALLS}: scope of ${scopePaths.length} file(s)`,
+            `analyzing a scope of ${scopePaths.length} file(s) (model call ${calls}/${MAX_HARNESS_CALLS})`,
           );
           const response = yield* session
             .send({
@@ -125,30 +112,34 @@ export const HermeneutLive: Layer.Layer<Hermeneut, never, Git | Harness> = Layer
               ),
             );
           if (response.kind === "contract") {
-            yield* Effect.logWarning("submit_result failed the answer contract; clarifying");
+            yield* Effect.logWarning(
+              "the model's answer did not match the contract; asking it to resubmit",
+            );
             if (clarifications >= MAX_CLARIFICATIONS) {
               return yield* response.error;
             }
             clarifications++;
-            prompt = contractClarificationPrompt({ reason: response.error.message });
+            // The SchemaError in `cause` carries the formatted issue tree —
+            // that detail, not the wrapper message, is what lets the model
+            // fix the payload.
+            prompt = contractClarificationPrompt(
+              response.error.cause instanceof Error
+                ? response.error.cause.message
+                : response.error.message,
+            );
             continue;
           }
           yield* Effect.logInfo(
             response.kind === "division"
-              ? `division: ${response.components.length} component(s), ${response.relationships.length} relationship(s)`
-              : "cohesive: scope analyzed",
+              ? `found ${response.components.length} component(s) and ${response.relationships.length} relationship(s) in this scope`
+              : "this scope is one module",
           );
-          const issues = yield* validateResponse(response, {
-            inventory,
-            lineCount,
-            seenIds,
-          });
+          const issues = yield* validateResponse(response, { inventory, lineCount });
           if (issues.length === 0) {
-            rememberIds(response);
             return response;
           }
           yield* Effect.logWarning(
-            `${issues.length} invalid claim(s); requesting clarification round ${clarifications + 1}`,
+            `${issues.length} claim(s) do not match the repository; asking the model to correct them (round ${clarifications + 1})`,
           );
           if (clarifications >= MAX_CLARIFICATIONS) {
             return yield* new InvalidResultError({
@@ -158,7 +149,7 @@ export const HermeneutLive: Layer.Layer<Hermeneut, never, Git | Harness> = Layer
             });
           }
           clarifications++;
-          prompt = clarificationPrompt({ issues });
+          prompt = clarificationPrompt(issues);
         }
       });
 
@@ -179,7 +170,7 @@ export const HermeneutLive: Layer.Layer<Hermeneut, never, Git | Harness> = Layer
             }
           }
         };
-        if (response.kind === "cohesive") {
+        if (response.kind === "module") {
           recordInterpretations(response.interpretations);
           return;
         }
@@ -196,14 +187,16 @@ export const HermeneutLive: Layer.Layer<Hermeneut, never, Git | Harness> = Layer
         }
       });
 
-      const buildFiles = Effect.fn("Hermeneut.buildFiles")(function* () {
-        const files: Array<{
-          path: string;
-          hash: string;
-          lineCount: number;
-        }> = [];
+      const buildFiles = Effect.fn("Hermeneut.buildFiles")(function* (): Effect.fn.Return<
+        ReadonlyArray<FileStatus>,
+        AnalyzeError
+      > {
+        const files: Array<FileStatus> = [];
         for (const path of [...referenced].sort()) {
           const entry = inventory.get(path);
+          // Defense in depth: component files and anchors are validated
+          // against the inventory, but scope paths enter `referenced`
+          // before any claim validation has run over them.
           if (entry === undefined) {
             return yield* new InvalidResultError({
               message: `file "${path}" is referenced but missing from the inventory`,
