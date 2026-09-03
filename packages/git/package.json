@@ -8,6 +8,7 @@
   },
   "dependencies": {
     "@effect/platform-bun": "catalog:",
+    "@know-the-map/harness": "workspace:*",
     "effect": "catalog:"
   },
   "devDependencies": {
