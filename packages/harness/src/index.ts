@@ -5,6 +5,7 @@ export {
   NoSubmissionError,
   NotImplementedError,
 } from "./errors.ts";
+export { guard } from "./guard.ts";
 export type {
   HarnessError,
   HarnessExchange,
