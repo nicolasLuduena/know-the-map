@@ -10,8 +10,15 @@ import {
   NoSubmissionError,
 } from "@know-the-map/harness";
 import { Plugin } from "@opencode-ai/plugin/effect";
-import { Model, OpenCode, type Session, Tool } from "@opencode-ai/sdk/effect";
-import { Deferred, Effect, Layer, Option, Predicate, Ref, Schema } from "effect";
+import {
+  Location,
+  Model,
+  OpenCode,
+  type Session,
+  type SessionMessage,
+  Tool,
+} from "@opencode-ai/sdk/effect";
+import { Deferred, Effect, Layer, Option, Ref, Schema } from "effect";
 import {
   OPENCODE_CREATE_OPTIONS,
   OPENCODE_MODEL,
@@ -26,13 +33,16 @@ const MAX_GENERATION_TOKENS = 32_768;
 /**
  * A single model turn (agent reading files, then submitting) must finish
  * within this window or the exchange fails loudly instead of hanging.
+ * TODO(config): the turn budget belongs to the run configuration.
  */
 const TURN_TIMEOUT = "15 minutes";
 
 /**
  * Tools the analyze session must never see: anything that could mutate the
- * repository or reach the network. On top of this filter, the host config
- * denies the corresponding permissions, so mutation is doubly blocked.
+ * repository, prompt a human, or spawn work we cannot await. On top of this
+ * filter, the host config denies the corresponding permissions, so mutation
+ * is doubly blocked. Exploration aids that are read-only (skill, websearch)
+ * stay available.
  */
 const BLOCKED_TOOLS = new Set([
   "bash",
@@ -40,33 +50,26 @@ const BLOCKED_TOOLS = new Set([
   "write",
   "patch",
   "webfetch",
-  "websearch",
   "todowrite",
   "todoread",
   "question",
   "task",
-  "skill",
 ]);
 
-/** `Effect.timeout` fails with a tagged `TimeoutError`; the SDK's own errors
- *  are not tagged, so discriminate manually. */
-const isTimeout = (cause: unknown): boolean => Predicate.isTagged(cause, "TimeoutError");
-
 /**
- * Permissive wire schema for `submit_result`: the harness applies the real
- * contract (the exchange's `resultSchema`) after capture, so the tool itself
- * accepts any object.
+ * Mutable wiring between the layer and the plugin, shared because the SDK
+ * only exposes the host's session domain from inside plugin context:
+ *
+ * - `session`: resolved once, when the plugin boots — the host session
+ *   domain (`create`/`prompt`/`wait`) as seen from the plugin side.
+ * - `pending`: in-flight exchanges keyed by session id. Each entry is the
+ *   one-shot Deferred waiting for that session's `submit_result` payload.
+ * - `systemPrompt`: what the context hook appends to every generation. The
+ *   slice runs one session at a time, so a single Ref suffices.
  */
-const SUBMIT_RESULT_INPUT = { type: "object" } as const;
-
-interface PendingRequest {
-  readonly submission: Deferred.Deferred<unknown, never>;
-}
-
 interface HostState {
   readonly session: Deferred.Deferred<Plugin.Context["session"], never>;
-  readonly pending: Ref.Ref<ReadonlyMap<string, PendingRequest>>;
-  /** Per-session system prompt; the slice runs one session at a time. */
+  readonly pending: Ref.Ref<ReadonlyMap<string, Deferred.Deferred<unknown, never>>>;
   readonly systemPrompt: Ref.Ref<string>;
 }
 
@@ -77,25 +80,38 @@ const submissionTool = (state: HostState) =>
       Effect.gen(function* () {
         yield* Deferred.succeed(state.session, ctx.session);
 
+        // `draft` is ToolDraft: the plugin-facing tool registry. The input
+        // schema is intentionally permissive — the real contract is the
+        // exchange's resultSchema, applied by the harness after capture —
+        // so a malformed payload gets a typed InvalidResultError (and a
+        // clarification round) instead of an opaque tool-schema rejection.
         yield* ctx.tool.transform((draft) => {
           draft.add({
             name: "submit_result",
             description: SUBMIT_RESULT_DESCRIPTION,
-            input: SUBMIT_RESULT_INPUT,
+            input: { type: "object" } as const,
             execute: (input, context) =>
               Effect.gen(function* () {
-                const pending = (yield* Ref.get(state.pending)).get(context.sessionID);
-                if (pending === undefined) {
-                  return yield* new Tool.Error({
-                    message: "no pending harness exchange",
-                  });
-                }
-                yield* Deferred.succeed(pending.submission, input);
+                const submission = yield* Ref.get(state.pending).pipe(
+                  Effect.map((requests) => requests.get(context.sessionID)),
+                  Effect.filterOrFail(
+                    (request) => request !== undefined,
+                    () =>
+                      new Tool.Error({
+                        message: "no pending harness exchange for this session",
+                      }),
+                  ),
+                );
+                yield* Deferred.succeed(submission, input);
                 return { content: "Result submitted." };
               }),
           });
         });
 
+        // Runs on every generation, just before the model call: append the
+        // fixed instructions, cap output tokens, and strip blocked tools.
+        // `event.system.push` adds to the agent's own system prompt (Plan /
+        // Build behavior included) — it does not replace it.
         yield* ctx.session.hook("context", (event) =>
           Effect.gen(function* () {
             event.system.push({
@@ -106,7 +122,7 @@ const submissionTool = (state: HostState) =>
             event.tools = Object.fromEntries(
               Object.entries(event.tools).filter(([name]) => !BLOCKED_TOOLS.has(name)),
             );
-            yield* Effect.logInfo(`session tools: ${Object.keys(event.tools).join(", ")}`);
+            yield* Effect.logInfo(`analyze session tools: ${Object.keys(event.tools).join(", ")}`);
           }),
         );
       }),
@@ -119,52 +135,66 @@ const sendExchange = Effect.fn("OpencodeHarnessSession.send")(function* <T, I>(
   sessionID: Session.ID,
   exchange: HarnessExchange<T, I>,
 ): Effect.fn.Return<T, HarnessError> {
-  const pending: PendingRequest = {
-    submission: yield* Deferred.make<unknown, never>(),
-  };
+  const submission = yield* Deferred.make<unknown, never>();
 
-  const register = Ref.update(state.pending, (requests) => {
-    const next = new Map(requests);
-    next.set(sessionID, pending);
-    return next;
-  });
+  const register = Ref.update(state.pending, (requests) =>
+    new Map(requests).set(sessionID, submission),
+  );
   const unregister = Ref.update(state.pending, (requests) => {
     const next = new Map(requests);
     next.delete(sessionID);
     return next;
   });
 
+  // Interruption-safe bookkeeping: the exchange owns its slot for exactly
+  // the turn — registered before, unregistered however the turn ends.
   return yield* Effect.acquireUseRelease(
     register,
     () =>
       Effect.gen(function* () {
-        yield* pluginSession
-          .prompt({
-            sessionID,
-            text: exchange.prompt,
-          })
-          .pipe(
-            Effect.timeout(TURN_TIMEOUT),
-            Effect.mapError((cause) =>
-              isTimeout(cause)
-                ? new HostFailureError({ message: "sessions.prompt() timed out" })
-                : new HostFailureError({ message: "sessions.prompt() failed", cause }),
-            ),
-          );
-
-        yield* pluginSession.wait({ sessionID }).pipe(
-          Effect.timeout(TURN_TIMEOUT),
-          Effect.mapError((cause) =>
-            isTimeout(cause)
-              ? new HostFailureError({ message: "sessions.wait() timed out" })
-              : new HostFailureError({ message: "sessions.wait() failed", cause }),
+        // One turn = prompt + wait for idle. `wait` blocks until the
+        // session has finished all generations and tool calls it queued
+        // for the prompt, not just until the first reply part.
+        yield* pluginSession.prompt({ sessionID, text: exchange.prompt }).pipe(
+          Effect.mapError(
+            (cause) => new HostFailureError({ message: "sessions.prompt() failed", cause }),
           ),
+          Effect.timeoutOrElse({
+            duration: TURN_TIMEOUT,
+            orElse: () =>
+              Effect.fail(
+                new HostFailureError({
+                  message: `sessions.prompt() exceeded the ${TURN_TIMEOUT} turn budget`,
+                }),
+              ),
+          }),
         );
 
-        if (!(yield* Deferred.isDone(pending.submission))) {
+        yield* pluginSession.wait({ sessionID }).pipe(
+          Effect.mapError(
+            (cause) => new HostFailureError({ message: "sessions.wait() failed", cause }),
+          ),
+          Effect.timeoutOrElse({
+            duration: TURN_TIMEOUT,
+            orElse: () =>
+              Effect.fail(
+                new HostFailureError({
+                  message: `sessions.wait() exceeded the ${TURN_TIMEOUT} turn budget`,
+                }),
+              ),
+          }),
+        );
+
+        const submitted = yield* Deferred.isDone(submission);
+        if (!submitted) {
+          // The turn ended with no tool call. Pull the transcript to tell
+          // "the session errored" apart from "the model answered in chat
+          // instead of submitting". `Effect.option` absorbs a missing or
+          // gone session: nothing to report, plain NoSubmissionError.
           const exported = yield* opencode.sessions.export({ sessionID }).pipe(Effect.option);
           if (Option.isSome(exported)) {
-            const last = exported.value.messages[exported.value.messages.length - 1];
+            const last: SessionMessage.Info | undefined =
+              exported.value.messages[exported.value.messages.length - 1];
             yield* Effect.logWarning(
               `session produced ${exported.value.messages.length} messages; last: ${
                 last === undefined ? "(none)" : JSON.stringify(last).slice(0, 500)
@@ -182,12 +212,12 @@ const sendExchange = Effect.fn("OpencodeHarnessSession.send")(function* <T, I>(
           });
         }
 
-        const submitted = yield* Deferred.await(pending.submission);
+        const payload = yield* Deferred.await(submission);
 
-        return yield* Schema.decodeUnknownEffect(exchange.resultSchema)(submitted).pipe(
+        return yield* Schema.decodeUnknownEffect(exchange.resultSchema)(payload).pipe(
           Effect.tapErrorTag("SchemaError", () =>
             Effect.logWarning(
-              `submit_result payload failed validation: ${JSON.stringify(submitted).slice(0, 2000)}`,
+              `submit_result payload failed validation: ${JSON.stringify(payload).slice(0, 2000)}`,
             ),
           ),
           Effect.mapError(
@@ -213,14 +243,25 @@ export const OpencodeHarnessLive: Layer.Layer<Harness, MissingApiKeyError | Host
   Layer.effect(
     Harness,
     Effect.gen(function* () {
-      const apiKey = yield* resolveOpenCodeGoApiKey;
-      if (apiKey === undefined) {
-        return yield* new MissingApiKeyError({
-          message:
-            "no opencode-go API key found; log in to opencode (auth.json is the only key source)",
-        });
-      }
+      const apiKey = yield* resolveOpenCodeGoApiKey.pipe(
+        Effect.filterOrFail(
+          (key) => key !== undefined,
+          () =>
+            new MissingApiKeyError({
+              message:
+                "no opencode-go API key found; log in to opencode (auth.json is the only key source)",
+            }),
+        ),
+      );
 
+      // The provider reads its key from the env var declared in
+      // OPENCODE_CONFIG (`env: ["OPENCODE_GO_API_KEY"]`): the SDK exposes
+      // no parameter to pass a key, and its credential API only renames or
+      // removes *stored* credentials. So we inject the variable for
+      // exactly the lifetime of the host and restore the previous value
+      // after — keeping the key out of any config file written to disk.
+      // TODO(config): a proper init step should hand the key over —
+      // tracked as an issue.
       yield* Effect.acquireRelease(
         Effect.sync(() => {
           const previous = process.env["OPENCODE_GO_API_KEY"];
@@ -243,11 +284,12 @@ export const OpencodeHarnessLive: Layer.Layer<Harness, MissingApiKeyError | Host
         ),
       );
 
+      // TODO(config): the model belongs to the run configuration.
       const model = Model.Ref.parse(OPENCODE_MODEL);
 
       const state: HostState = {
         session: yield* Deferred.make<Plugin.Context["session"], never>(),
-        pending: yield* Ref.make<ReadonlyMap<string, PendingRequest>>(new Map()),
+        pending: yield* Ref.make<ReadonlyMap<string, Deferred.Deferred<unknown, never>>>(new Map()),
         systemPrompt: yield* Ref.make(""),
       };
 
@@ -258,6 +300,10 @@ export const OpencodeHarnessLive: Layer.Layer<Harness, MissingApiKeyError | Host
             (cause) => new HostFailureError({ message: "plugin registration failed", cause }),
           ),
         );
+      // Plugin booting is lazy: `list()` is what makes the host instantiate
+      // the registration, whose effect resolves `state.session`. The only
+      // plugin we register is `submit_result` itself; we rely on no other
+      // plugin behavior.
       yield* opencode.plugin
         .list()
         .pipe(
@@ -275,17 +321,20 @@ export const OpencodeHarnessLive: Layer.Layer<Harness, MissingApiKeyError | Host
           .create({
             title: "ktm analyze",
             model,
+            // The session's working directory: file tools of the analyze
+            // agent are scoped to the repository under analysis, not to
+            // wherever the host process happens to run.
+            location: { directory: Location.Ref.fields.directory.make(config.directory) },
           })
           .pipe(
             Effect.mapError(
               (cause) => new HostFailureError({ message: "sessions.create() failed", cause }),
             ),
           );
-        const sessionID = created.id;
 
         return {
           send: <T, I>(exchange: HarnessExchange<T, I>) =>
-            sendExchange(state, opencode, pluginSession, sessionID, exchange),
+            sendExchange(state, opencode, pluginSession, created.id, exchange),
           close: () => Effect.void,
         };
       });

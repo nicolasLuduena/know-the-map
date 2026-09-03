@@ -8,6 +8,8 @@ import {
 } from "./errors.ts";
 
 export interface HarnessSessionConfig {
+  /** Absolute path of the repository the session is pointed at. */
+  readonly directory: string;
   /** Fixed instruction block applied to every exchange of the session. */
   readonly systemPrompt: string;
 }

@@ -7,7 +7,7 @@ import { Harness, HarnessStub } from "./harness.ts";
 test("stub harness fails with NotImplementedError", async () => {
   const program = Effect.gen(function* () {
     const harness = yield* Harness;
-    return yield* harness.start({ systemPrompt: "test" });
+    return yield* harness.start({ directory: "/tmp", systemPrompt: "test" });
   }).pipe(Effect.provide(HarnessStub));
 
   const failure = await Effect.runPromise(Effect.flip(program)).then(

@@ -215,7 +215,7 @@ export const HermeneutLive: Layer.Layer<Hermeneut, never, Git | Harness> = Layer
       });
 
       return yield* Effect.acquireUseRelease(
-        harness.start({ systemPrompt: SYSTEM_PROMPT }),
+        harness.start({ directory: repo.root, systemPrompt: SYSTEM_PROMPT }),
         (session) =>
           Effect.gen(function* () {
             yield* visit(session, [...inventory.keys()], 0);
