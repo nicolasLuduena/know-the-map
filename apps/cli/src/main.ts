@@ -4,9 +4,9 @@ import { join } from "node:path";
 import { BunRuntime, BunServices } from "@effect/platform-bun";
 import { GitLive } from "@know-the-map/git";
 import { OpencodeHarnessLive } from "@know-the-map/harness-opencode";
-import { Hermeneut, HermeneutLive } from "@know-the-map/hermeneut";
-import { Console, Effect, Layer } from "effect";
-import { Argument, Command } from "effect/unstable/cli";
+import { defaultAnalysisBounds, Hermeneut, HermeneutLive } from "@know-the-map/hermeneut";
+import { Config, Console, Effect, Layer } from "effect";
+import { Argument, Command, Flag } from "effect/unstable/cli";
 
 const VERSION = "0.0.0";
 const OUTPUT_PATH = join(".ktm", "analysis.json");
@@ -18,11 +18,30 @@ const analyze = Command.make(
       Argument.withDescription("Directory inside the repository to analyze"),
       Argument.withDefault("."),
     ),
+    maxHarnessCalls: Flag.integer("max-harness-calls").pipe(
+      Flag.withDescription("Maximum model calls before the run stops"),
+      Flag.withFallbackConfig(Config.int("KTM_MAX_HARNESS_CALLS")),
+      Flag.withDefault(defaultAnalysisBounds.maxHarnessCalls),
+    ),
+    maxDepth: Flag.integer("max-depth").pipe(
+      Flag.withDescription("Maximum component-division depth before the run stops"),
+      Flag.withFallbackConfig(Config.int("KTM_MAX_DEPTH")),
+      Flag.withDefault(defaultAnalysisBounds.maxDepth),
+    ),
+    maxClarifications: Flag.integer("max-clarifications").pipe(
+      Flag.withDescription("Maximum clarification rounds per model exchange"),
+      Flag.withFallbackConfig(Config.int("KTM_MAX_CLARIFICATIONS")),
+      Flag.withDefault(defaultAnalysisBounds.maxClarifications),
+    ),
   },
-  ({ path }) =>
+  ({ path, maxHarnessCalls, maxDepth, maxClarifications }) =>
     Effect.gen(function* () {
       const hermeneut = yield* Hermeneut;
-      const artifact = yield* hermeneut.analyze(path);
+      const artifact = yield* hermeneut.analyze(path, {
+        maxHarnessCalls,
+        maxDepth,
+        maxClarifications,
+      });
       yield* Effect.sync(() => mkdirSync(".ktm", { recursive: true }));
       yield* Effect.tryPromise(() =>
         Bun.write(OUTPUT_PATH, `${JSON.stringify(artifact, null, 2)}\n`),
