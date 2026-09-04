@@ -42,6 +42,12 @@ export const buildHostConfig = () =>
       // embedded and headless.
       { action: "question", resource: "*", effect: "deny" },
       { action: "task", resource: "*", effect: "deny" },
+      // A path outside the session directory (or its detected worktree
+      // root) goes through a distinct "external_directory" check, not
+      // "read" — confirmed against opencode's own path-resolution source.
+      // Denied explicitly so it fails loudly instead of falling to the
+      // unmatched-action "ask" default (fatal for a headless run).
+      { action: "external_directory", resource: "*", effect: "deny" },
       // Reads are explicitly allowed so no path ever lands in "ask".
       { action: "read", resource: "*", effect: "allow" },
       { action: "grep", resource: "*", effect: "allow" },
