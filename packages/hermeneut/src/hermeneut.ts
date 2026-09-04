@@ -5,7 +5,7 @@ import {
   type HarnessSession,
   InvalidResultError,
 } from "@know-the-map/harness";
-import { Context, DateTime, Effect, Layer } from "effect";
+import { Context, DateTime, Effect, Layer, Schema } from "effect";
 import { AnalysisBoundExceededError } from "./errors.ts";
 import {
   clarificationPrompt,
@@ -20,13 +20,23 @@ import type {
   Interpretation,
   Relationship,
 } from "./schemas.ts";
-import { LlmResponse } from "./schemas.ts";
+import { LlmResponse, PositiveInt } from "./schemas.ts";
 import { validateResponse } from "./validation.ts";
 
-// TODO(config): every bound below should come from the run configuration.
-const MAX_HARNESS_CALLS = 48;
-const MAX_DEPTH = 3;
-const MAX_CLARIFICATIONS = 3;
+/** Per-run bounds on the analysis loop: how much model budget and division
+ * depth one `analyze()` call may spend before it stops itself. */
+export const AnalysisBounds = Schema.Struct({
+  maxHarnessCalls: PositiveInt,
+  maxDepth: PositiveInt,
+  maxClarifications: Schema.Int.pipe(Schema.check(Schema.isGreaterThanOrEqualTo(0))),
+});
+export type AnalysisBounds = Schema.Schema.Type<typeof AnalysisBounds>;
+
+export const defaultAnalysisBounds: AnalysisBounds = {
+  maxHarnessCalls: 48,
+  maxDepth: 3,
+  maxClarifications: 3,
+};
 
 export type AnalyzeError = GitError | HarnessError | AnalysisBoundExceededError;
 
@@ -47,7 +57,10 @@ export class Hermeneut extends Context.Service<
      * division plus line-anchored interpretations, ending in a
      * persisted-ready artifact.
      */
-    analyze(directory: string): Effect.Effect<AnalysisArtifact, AnalyzeError>;
+    analyze(
+      directory: string,
+      bounds?: AnalysisBounds,
+    ): Effect.Effect<AnalysisArtifact, AnalyzeError>;
   }
 >()("@know-the-map/hermeneut/Hermeneut") {}
 
@@ -59,6 +72,7 @@ export const HermeneutLive: Layer.Layer<Hermeneut, never, Git | Harness> = Layer
 
     const analyze = Effect.fn("Hermeneut.analyze")(function* (
       directory: string,
+      bounds: AnalysisBounds = defaultAnalysisBounds,
     ): Effect.fn.Return<AnalysisArtifact, AnalyzeError> {
       const repo = yield* git.resolve(directory);
       const entries = yield* git.inventory(repo.root);
@@ -88,16 +102,16 @@ export const HermeneutLive: Layer.Layer<Hermeneut, never, Git | Harness> = Layer
         let prompt = scopePrompt(scopePaths);
         let clarifications = 0;
         while (true) {
-          if (calls >= MAX_HARNESS_CALLS) {
+          if (calls >= bounds.maxHarnessCalls) {
             // TODO(ux): before giving up, offer to continue and report the
             // cost the sessions have accumulated — tracked as an issue.
             return yield* new AnalysisBoundExceededError({
-              message: `analysis stopped after ${MAX_HARNESS_CALLS} model calls`,
+              message: `analysis stopped after ${bounds.maxHarnessCalls} model calls`,
             });
           }
           calls++;
           yield* Effect.logInfo(
-            `analyzing a scope of ${scopePaths.length} file(s) (model call ${calls}/${MAX_HARNESS_CALLS})`,
+            `analyzing a scope of ${scopePaths.length} file(s) (model call ${calls}/${bounds.maxHarnessCalls})`,
           );
           const response = yield* session
             .send({
@@ -115,7 +129,7 @@ export const HermeneutLive: Layer.Layer<Hermeneut, never, Git | Harness> = Layer
             yield* Effect.logWarning(
               "the model's answer did not match the contract; asking it to resubmit",
             );
-            if (clarifications >= MAX_CLARIFICATIONS) {
+            if (clarifications >= bounds.maxClarifications) {
               return yield* response.error;
             }
             clarifications++;
@@ -141,7 +155,7 @@ export const HermeneutLive: Layer.Layer<Hermeneut, never, Git | Harness> = Layer
           yield* Effect.logWarning(
             `${issues.length} claim(s) do not match the repository; asking the model to correct them (round ${clarifications + 1})`,
           );
-          if (clarifications >= MAX_CLARIFICATIONS) {
+          if (clarifications >= bounds.maxClarifications) {
             return yield* new InvalidResultError({
               message: `model failed to produce a valid result after ${clarifications} clarification round(s); unresolved: ${issues
                 .map((issue) => `claim ${issue.id} (${issue.claim}): ${issue.reason}`)
@@ -174,9 +188,9 @@ export const HermeneutLive: Layer.Layer<Hermeneut, never, Git | Harness> = Layer
           recordInterpretations(response.interpretations);
           return;
         }
-        if (depth >= MAX_DEPTH) {
+        if (depth >= bounds.maxDepth) {
           return yield* new AnalysisBoundExceededError({
-            message: `division at depth ${depth} would exceed the max depth of ${MAX_DEPTH}`,
+            message: `division at depth ${depth} would exceed the max depth of ${bounds.maxDepth}`,
           });
         }
         components.push(...response.components);

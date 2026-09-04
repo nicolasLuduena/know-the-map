@@ -10,6 +10,7 @@ import {
 } from "@know-the-map/harness";
 import { Effect, Layer, Schema } from "effect";
 import { AnalysisBoundExceededError } from "./errors.ts";
+import type { AnalysisBounds } from "./hermeneut.ts";
 import { Hermeneut, HermeneutLive } from "./hermeneut.ts";
 import type { AnalysisArtifact } from "./schemas.ts";
 
@@ -83,11 +84,11 @@ const scriptHarness = (
     }),
   );
 
-const runAnalysis = async (script: ReadonlyArray<unknown>) => {
+const runAnalysis = async (script: ReadonlyArray<unknown>, bounds?: AnalysisBounds) => {
   const sent: Array<{ prompt: string; payload: unknown }> = [];
   const program = Effect.gen(function* () {
     const hermeneut = yield* Hermeneut;
-    return yield* hermeneut.analyze(".");
+    return yield* hermeneut.analyze(".", bounds);
   }).pipe(
     Effect.provide(
       HermeneutLive.pipe(Layer.provide(MockGit), Layer.provide(scriptHarness(script, sent))),
@@ -313,6 +314,34 @@ test("reaching the harness-call bound fails loudly", async () => {
   expect(outcome.left).toBeInstanceOf(AnalysisBoundExceededError);
   expect(outcome.left.message).toContain("48 model calls");
   expect(sent).toHaveLength(48);
+});
+
+test("a custom maxHarnessCalls bound is honored, not just the default", async () => {
+  const script: Array<unknown> = [
+    division({
+      components: Array.from({ length: 3 }, (_, index) => ({
+        id: index + 1,
+        name: `c${index}`,
+        summary: "leaf",
+        files: ["src/a.ts"],
+      })),
+      relationships: [],
+      interpretations: [],
+    }),
+    module(100, "src/a.ts"),
+    module(101, "src/a.ts"),
+  ];
+  const { outcome, sent } = await runAnalysis(script, {
+    maxHarnessCalls: 2,
+    maxDepth: 3,
+    maxClarifications: 3,
+  });
+
+  expect(outcome._tag).toBe("Left");
+  if (outcome._tag !== "Left") return;
+  expect(outcome.left).toBeInstanceOf(AnalysisBoundExceededError);
+  expect(outcome.left.message).toContain("2 model calls");
+  expect(sent).toHaveLength(2);
 });
 
 test("divisions nested beyond the max depth fail loudly", async () => {
