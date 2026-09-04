@@ -3,10 +3,13 @@ import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { BunRuntime, BunServices } from "@effect/platform-bun";
 import { GitLive } from "@know-the-map/git";
+import { guard, Harness, HostFailureError } from "@know-the-map/harness";
 import { OpencodeHarnessLive } from "@know-the-map/harness-opencode";
 import { defaultAnalysisBounds, Hermeneut, HermeneutLive } from "@know-the-map/hermeneut";
 import { Config, Console, Effect, Layer } from "effect";
 import { Argument, Command, Flag } from "effect/unstable/cli";
+import { readHarnessPreferences, writeHarnessPreferences } from "./harness-preferences.ts";
+import { promptHarnessSelection } from "./harness-prompt.ts";
 
 const VERSION = "0.0.0";
 const OUTPUT_PATH = join(".ktm", "analysis.json");
@@ -36,8 +39,24 @@ const analyze = Command.make(
   },
   ({ path, maxHarnessCalls, maxDepth, maxClarifications }) =>
     Effect.gen(function* () {
+      const harness = yield* Harness;
       const hermeneut = yield* Hermeneut;
-      const artifact = yield* hermeneut.analyze(path, {
+
+      const options = yield* harness.listModels();
+      yield* guard(
+        options.length > 0,
+        () =>
+          new HostFailureError({
+            message: "no usable provider found — check ~/.local/share/opencode/auth.json",
+          }),
+      );
+      const defaults = yield* readHarnessPreferences;
+      const selection = yield* promptHarnessSelection(options, defaults).pipe(
+        Effect.mapError((cause) => new HostFailureError({ message: "prompt cancelled", cause })),
+      );
+      yield* writeHarnessPreferences(selection.preferences);
+
+      const artifact = yield* hermeneut.analyze(path, selection.harness, {
         maxHarnessCalls,
         maxDepth,
         maxClarifications,
@@ -61,11 +80,18 @@ const cli = Command.make("ktm").pipe(
 cli.pipe(
   Command.run({ version: VERSION }),
   Effect.provide(
-    HermeneutLive.pipe(
-      Layer.provide(Layer.provide(GitLive, BunServices.layer)),
-      Layer.provide(OpencodeHarnessLive),
-      Layer.provideMerge(BunServices.layer),
-    ),
+    // OpencodeHarnessLive appears twice by reference — once merged in
+    // directly (so the `analyze` command handler can call harness.listModels()
+    // itself) and once fed into HermeneutLive. Effect memoizes layer
+    // construction by identity within one composed graph, so the embedded
+    // host is still only built once, not twice.
+    Layer.mergeAll(
+      HermeneutLive.pipe(
+        Layer.provide(Layer.provide(GitLive, BunServices.layer)),
+        Layer.provide(OpencodeHarnessLive),
+      ),
+      OpencodeHarnessLive,
+    ).pipe(Layer.provideMerge(BunServices.layer)),
   ),
   BunRuntime.runMain,
 );
