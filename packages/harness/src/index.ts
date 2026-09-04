@@ -11,7 +11,6 @@ export type {
   HarnessExchange,
   HarnessModelOption,
   HarnessModelSelection,
-  HarnessModelVariant,
   HarnessSession,
   HarnessSessionConfig,
 } from "./harness.ts";

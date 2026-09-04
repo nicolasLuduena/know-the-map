@@ -1,15 +1,13 @@
 import { join } from "node:path";
+import type { OpenCode } from "@opencode-ai/sdk/effect";
 import { Effect, Option, Schema } from "effect";
 
 /**
  * Providers this harness knows how to authenticate, mapped to the env var
- * their driver reads its key from. Sourced from opencode's own bundled
- * catalog data (not a public runtime API — `opencode-go`'s real entry
- * declares `env: ["OPENCODE_API_KEY"]`, confirmed live; `openrouter`'s
- * confirmed against `@opencode-ai/ai`'s source). A provider present in
- * auth.json but absent here is silently excluded from `listModels()`, not
- * a crash — broader/graceful multi-provider handling is a tracked follow-up,
- * not built here.
+ * their driver reads its key from (sourced from opencode's bundled catalog
+ * data, not a public API — confirmed live per provider). A provider
+ * present in `auth.json` but absent here is silently excluded from
+ * `listModels()` (tracked: #33).
  */
 export const PROVIDER_ENV_VARS: Readonly<Record<string, string>> = {
   "opencode-go": "OPENCODE_API_KEY",
@@ -59,10 +57,7 @@ export const buildHostConfig = () =>
 
 const AuthEntry = Schema.Struct({ type: Schema.Literal("api"), key: Schema.String });
 
-/**
- * Reads opencode's auth file as a raw record. `{}` on any missing or
- * unparseable file — "no entries" is a normal result, not a failure.
- */
+/** Reads opencode's auth file as a raw record; `{}` if missing or unparseable. */
 const readAuthEntries: Effect.Effect<Record<string, unknown>> = Effect.gen(function* () {
   const home = process.env["HOME"];
   if (home === undefined) {
@@ -83,11 +78,9 @@ const readAuthEntries: Effect.Effect<Record<string, unknown>> = Effect.gen(funct
 });
 
 /**
- * The API key comes exclusively from opencode's auth file. No environment
- * variable fallback: one place to look, one place to fix. The file holds
- * one entry per provider, so a given `providerID` being absent is a normal
- * decode result, not an error. Only `type: "api"` entries are usable —
- * other auth types (OAuth, etc.) are out of scope for this harness.
+ * The API key comes exclusively from opencode's auth file — no env var
+ * fallback. Only `type: "api"` entries are usable; other auth types
+ * (OAuth, etc.) are out of scope here (tracked: #33).
  */
 export const resolveApiKey = (providerID: string): Effect.Effect<string | undefined> =>
   readAuthEntries.pipe(
@@ -114,12 +107,11 @@ export const listUsableProviderIds: Effect.Effect<ReadonlyArray<string>> = readA
 );
 
 /**
- * Scratch options for `OpenCode.create`. `directory` is where the embedded
- * host *discovers config files* — a scratch path so neither the user's nor
- * the analyzed repository's config can leak into the run; `project: false`
- * disables project-level discovery, and `content` is the only config it
- * ever sees. Note this is not the session's working directory: that is
- * passed per session as `location.directory` (see opencode-harness.ts).
+ * Opencode's config directory. Avoids the user's and the project's config.
+ * Not the working directory, which gets passed per session (see
+ * opencode-harness.ts). `project: false` also means the analyzed repo's own
+ * skills and AGENTS.md never load here — worth a second look (see PR
+ * discussion).
  */
 export const buildCreateOptions = (scratchDirectory: string) =>
   ({
@@ -128,4 +120,4 @@ export const buildCreateOptions = (scratchDirectory: string) =>
       project: false,
       content: JSON.stringify(buildHostConfig()),
     },
-  }) as const;
+  }) satisfies OpenCode.CreateOptions;

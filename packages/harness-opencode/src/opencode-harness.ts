@@ -240,12 +240,10 @@ const sendExchange = Effect.fn("OpencodeHarnessSession.send")(function* <T, I>(
 export const OpencodeHarnessLive: Layer.Layer<Harness, HostFailureError> = Layer.effect(
   Harness,
   Effect.gen(function* () {
-    // Inject every provider we have a usable auth.json credential for, once,
-    // before the host boots. Confirmed live: opencode.model.list() only
-    // shows providers already authenticated at OpenCode.create() time, so
-    // this can't be deferred to after an interactive pick — it has to
-    // happen first, for everything we might offer. Layer-scoped, same shape
-    // as before this changed, just looped over more than one provider.
+    // Every usable provider's key is injected once, before the host boots:
+    // opencode.model.list() only shows providers already authenticated at
+    // OpenCode.create() time (confirmed live), so this can't wait until
+    // after an interactive pick.
     const usableProviders = yield* listUsableProviderIds;
     for (const providerId of usableProviders) {
       const envVar = PROVIDER_ENV_VARS[providerId];
@@ -301,10 +299,7 @@ export const OpencodeHarnessLive: Layer.Layer<Harness, HostFailureError> = Layer
           (cause) => new HostFailureError({ message: "plugin registration failed", cause }),
         ),
       );
-    // Plugin booting is lazy: `list()` is what makes the host instantiate
-    // the registration, whose effect resolves `state.session`. The only
-    // plugin we register is `submit_result` itself; we rely on no other
-    // plugin behavior.
+    // Plugin booting is lazy: `list()` triggers it, resolving `state.session`.
     yield* opencode.plugin
       .list()
       .pipe(
@@ -325,17 +320,13 @@ export const OpencodeHarnessLive: Layer.Layer<Harness, HostFailureError> = Layer
             (cause) => new HostFailureError({ message: "model.list() failed", cause }),
           ),
         );
-      // No usable-provider filter needed here: whatever comes back already
-      // reflects exactly what's authenticated (confirmed live above),
-      // including the legitimate no-auth "opencode" tier — a real option,
-      // not noise.
       return catalog.data
         .filter((model) => model.enabled)
         .map((model) => ({
           providerId: model.providerID,
           modelId: model.id,
           modelName: model.name,
-          variants: model.variants.map((variant) => ({ id: variant.id })),
+          variants: model.variants.map((variant) => variant.id),
           limit: model.limit,
           cost:
             model.cost.length === 0
@@ -350,8 +341,6 @@ export const OpencodeHarnessLive: Layer.Layer<Harness, HostFailureError> = Layer
       yield* Ref.set(state.systemPrompt, sessionConfig.systemPrompt);
       yield* Ref.set(state.maxGenerationTokens, sessionConfig.maxGenerationTokens);
 
-      // Schema.decodeSync against the whole Ref struct, not individual
-      // branded-field constructors — a certain, standard API either way.
       const model = Schema.decodeSync(Model.Ref)({
         id: sessionConfig.model.modelId,
         providerID: sessionConfig.model.providerId,

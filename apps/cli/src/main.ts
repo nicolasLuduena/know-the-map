@@ -80,11 +80,6 @@ const cli = Command.make("ktm").pipe(
 cli.pipe(
   Command.run({ version: VERSION }),
   Effect.provide(
-    // OpencodeHarnessLive appears twice by reference — once merged in
-    // directly (so the `analyze` command handler can call harness.listModels()
-    // itself) and once fed into HermeneutLive. Effect memoizes layer
-    // construction by identity within one composed graph, so the embedded
-    // host is still only built once, not twice.
     Layer.mergeAll(
       HermeneutLive.pipe(
         Layer.provide(Layer.provide(GitLive, BunServices.layer)),

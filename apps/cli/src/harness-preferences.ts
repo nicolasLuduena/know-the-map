@@ -3,10 +3,8 @@ import { join } from "node:path";
 import { Effect, Option, Schema } from "effect";
 
 /**
- * The last provider/model/variant/timing choice made interactively, so the
- * next `ktm analyze` run can pre-select it instead of starting from
- * scratch. Purely CLI-level UX state — the prompts still always run (no
- * flag skips them), this only changes their defaults.
+ * The last interactive choice, so the next run pre-selects it instead of
+ * starting fresh. Prompts still always run — this only changes defaults.
  */
 export const HarnessPreferences = Schema.Struct({
   providerId: Schema.String,

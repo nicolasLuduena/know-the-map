@@ -14,11 +14,6 @@ export interface HarnessModelSelection {
   readonly variantId?: string;
 }
 
-/** One reasoning/configuration variant a model offers. */
-export interface HarnessModelVariant {
-  readonly id: string;
-}
-
 /**
  * One provider+model `listModels()` may offer. Already filtered to what
  * this harness can actually run — every option here is usable.
@@ -27,7 +22,8 @@ export interface HarnessModelOption {
   readonly providerId: string;
   readonly modelId: string;
   readonly modelName: string;
-  readonly variants: ReadonlyArray<HarnessModelVariant>;
+  /** Reasoning/configuration variant ids this model offers, if any. */
+  readonly variants: ReadonlyArray<string>;
   readonly limit: {
     readonly context: number;
     readonly output: number;

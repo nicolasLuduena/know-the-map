@@ -60,9 +60,9 @@ export const promptHarnessSelection = (
             Prompt.select({
               message: "Reasoning / variant",
               choices: model.variants.map((variant) => ({
-                title: variant.id,
-                value: variant.id,
-                selected: variant.id === previous?.variantId,
+                title: variant,
+                value: variant,
+                selected: variant === previous?.variantId,
               })),
             }),
           );
