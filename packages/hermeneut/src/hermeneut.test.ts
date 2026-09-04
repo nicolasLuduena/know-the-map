@@ -8,11 +8,17 @@ import {
   InvalidResultError,
   NoSubmissionError,
 } from "@know-the-map/harness";
-import { Effect, Layer, Schema } from "effect";
+import { Duration, Effect, Layer, Schema } from "effect";
 import { AnalysisBoundExceededError } from "./errors.ts";
-import type { AnalysisBounds } from "./hermeneut.ts";
+import type { AnalysisBounds, HarnessSelection } from "./hermeneut.ts";
 import { Hermeneut, HermeneutLive } from "./hermeneut.ts";
 import type { AnalysisArtifact } from "./schemas.ts";
+
+const TEST_HARNESS_SELECTION: HarnessSelection = {
+  model: { providerId: "opencode-go", modelId: "deepseek-v4-flash" },
+  turnTimeout: Duration.minutes(15),
+  maxGenerationTokens: 32_768,
+};
 
 /**
  * The mock git service and the mock harness share this fixture: scripted
@@ -54,6 +60,7 @@ const scriptHarness = (
   Layer.succeed(
     Harness,
     Harness.of({
+      listModels: () => Effect.succeed([]),
       start: () =>
         Effect.sync(() => {
           const queue = [...script];
@@ -88,7 +95,7 @@ const runAnalysis = async (script: ReadonlyArray<unknown>, bounds?: AnalysisBoun
   const sent: Array<{ prompt: string; payload: unknown }> = [];
   const program = Effect.gen(function* () {
     const hermeneut = yield* Hermeneut;
-    return yield* hermeneut.analyze(".", bounds);
+    return yield* hermeneut.analyze(".", TEST_HARNESS_SELECTION, bounds);
   }).pipe(
     Effect.provide(
       HermeneutLive.pipe(Layer.provide(MockGit), Layer.provide(scriptHarness(script, sent))),

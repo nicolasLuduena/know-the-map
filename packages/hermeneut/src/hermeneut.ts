@@ -3,6 +3,7 @@ import {
   Harness,
   type HarnessError,
   type HarnessSession,
+  type HarnessSessionConfig,
   InvalidResultError,
 } from "@know-the-map/harness";
 import { Context, DateTime, Effect, Layer, Schema } from "effect";
@@ -38,6 +39,13 @@ export const defaultAnalysisBounds: AnalysisBounds = {
   maxClarifications: 3,
 };
 
+/** Which provider/model/variant and turn budget a run's session uses —
+ * the caller's choice, threaded straight through to `harness.start()`. */
+export type HarnessSelection = Pick<
+  HarnessSessionConfig,
+  "model" | "turnTimeout" | "maxGenerationTokens"
+>;
+
 export type AnalyzeError = GitError | HarnessError | AnalysisBoundExceededError;
 
 /**
@@ -59,6 +67,7 @@ export class Hermeneut extends Context.Service<
      */
     analyze(
       directory: string,
+      harnessSelection: HarnessSelection,
       bounds?: AnalysisBounds,
     ): Effect.Effect<AnalysisArtifact, AnalyzeError>;
   }
@@ -72,6 +81,7 @@ export const HermeneutLive: Layer.Layer<Hermeneut, never, Git | Harness> = Layer
 
     const analyze = Effect.fn("Hermeneut.analyze")(function* (
       directory: string,
+      harnessSelection: HarnessSelection,
       bounds: AnalysisBounds = defaultAnalysisBounds,
     ): Effect.fn.Return<AnalysisArtifact, AnalyzeError> {
       const repo = yield* git.resolve(directory);
@@ -223,7 +233,7 @@ export const HermeneutLive: Layer.Layer<Hermeneut, never, Git | Harness> = Layer
       });
 
       return yield* Effect.acquireUseRelease(
-        harness.start({ directory: repo.root, systemPrompt: SYSTEM_PROMPT }),
+        harness.start({ directory: repo.root, systemPrompt: SYSTEM_PROMPT, ...harnessSelection }),
         (session) =>
           Effect.gen(function* () {
             yield* visit(session, [...inventory.keys()], 0);
