@@ -1,30 +1,60 @@
-import { Context, Effect, Layer } from "effect";
-import { NotImplementedError } from "./errors.ts";
-import type { HarnessRequest, HarnessResult } from "./protocol.ts";
+import { Context, Effect, Layer, type Schema } from "effect";
+import {
+  type HostFailureError,
+  type InvalidResultError,
+  type MissingApiKeyError,
+  type NoSubmissionError,
+  NotImplementedError,
+} from "./errors.ts";
+
+export interface HarnessSessionConfig {
+  /** Absolute path of the repository the session is pointed at. */
+  readonly directory: string;
+  /** Fixed instruction block applied to every exchange of the session. */
+  readonly systemPrompt: string;
+}
+
+export interface HarnessExchange<T, I> {
+  /** The turn's user prompt (task, scope, or clarification). */
+  readonly prompt: string;
+  /**
+   * The contract the model's `submit_result` payload must satisfy. The
+   * harness decodes against it before handing the value back.
+   */
+  readonly resultSchema: Schema.Codec<T, I, never, never>;
+}
+
+/**
+ * One open model conversation. Sessions stay open until the hermeneut
+ * decides to close them: clarification rounds reuse the same session so the
+ * model keeps the context of what it claimed.
+ */
+export interface HarnessSession {
+  send<T, I>(exchange: HarnessExchange<T, I>): Effect.Effect<T, HarnessError>;
+  close(): Effect.Effect<void, HarnessError>;
+}
 
 /**
  * A replaceable execution harness. Know the Map owns orchestration, schemas
- * and validation; the harness owns each bounded model session, its tools,
- * provider selection and streaming.
- *
- * One-shot for now: one structured request in, one validated structured
- * result out. TODO: decide later whether multi-turn sessions belong in this
- * interface or in a separate one.
+ * and validation; the harness owns each bounded model conversation, its
+ * tools, provider selection and streaming.
  */
 export class Harness extends Context.Service<
   Harness,
   {
-    execute(request: HarnessRequest): Effect.Effect<HarnessResult, HarnessError>;
+    start(config: HarnessSessionConfig): Effect.Effect<HarnessSession, HarnessError>;
   }
 >()("@know-the-map/harness/Harness") {}
 
 /**
- * TODO: grow this union as real failure modes are designed (transport
- * failures, no-submission, invalid-result, ...). See the probe's error
- * taxonomies in `harness-probe/src/pi-harness.ts` and
- * `harness-probe/src/opencode2-harness.ts`.
+ * `NotImplementedError` is raised only by stubs; real adapters never do.
  */
-export type HarnessError = NotImplementedError;
+export type HarnessError =
+  | NotImplementedError
+  | HostFailureError
+  | MissingApiKeyError
+  | NoSubmissionError
+  | InvalidResultError;
 
 /**
  * A `Harness` implementation that always fails. Useful for wiring and tests
@@ -33,6 +63,6 @@ export type HarnessError = NotImplementedError;
 export const HarnessStub: Layer.Layer<Harness> = Layer.succeed(
   Harness,
   Harness.of({
-    execute: () => Effect.fail(new NotImplementedError({ message: "harness is not implemented" })),
+    start: () => Effect.fail(new NotImplementedError({ message: "harness is not implemented" })),
   }),
 );

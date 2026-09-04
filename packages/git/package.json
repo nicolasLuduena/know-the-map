@@ -1,5 +1,5 @@
 {
-  "name": "@know-the-map/hermeneut",
+  "name": "@know-the-map/git",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -7,8 +7,11 @@
     ".": "./src/index.ts"
   },
   "dependencies": {
-    "@know-the-map/git": "workspace:*",
+    "@effect/platform-bun": "catalog:",
     "@know-the-map/harness": "workspace:*",
     "effect": "catalog:"
+  },
+  "devDependencies": {
+    "@types/bun": "catalog:"
   }
 }

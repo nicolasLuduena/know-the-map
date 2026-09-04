@@ -14,6 +14,17 @@ Before writing any Effect code, first read `node_modules/effect/AGENTS.md`
 If you need to learn more about particular Effect apis and concepts that the
 guide doesn't cover, search through the source code in `node_modules/effect/src`.
 
+# GitHub identity
+
+When posting a reply to a PR review comment on your own initiative (not a
+human typing through their own `gh`), authenticate as the bot: use
+`ghbot api ...` instead of `gh api ...` for that call. `ghbot` is a local
+wrapper (`~/.local/bin/ghbot`) that runs `gh` with a GitHub App installation
+token, so the reply is attributed to `nicolasluduena-coding-agent[bot]`
+rather than impersonating the human account. Everything else — commits,
+pushes, `gh pr create`, `gh pr view`, and any action a human is directing
+interactively — stays on the normal `gh` session.
+
 # Monorepo
 
 - Bun workspaces: `packages/*` (libraries) and `apps/*` (executables).

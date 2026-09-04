@@ -1,0 +1,40 @@
+{
+  "$schema": "./node_modules/@biomejs/biome/configuration_schema.json",
+  "vcs": {
+    "enabled": true,
+    "clientKind": "git",
+    "useIgnoreFile": true
+  },
+  "files": {
+    "includes": ["packages/**", "apps/**"]
+  },
+  "formatter": {
+    "enabled": true,
+    "indentStyle": "space",
+    "indentWidth": 2,
+    "lineWidth": 100
+  },
+  "linter": {
+    "enabled": true
+  },
+  "overrides": [
+    {
+      // tsconfig turns on noPropertyAccessFromIndexSignature, so reads of
+      // `process.env` (an index signature) must be written with brackets.
+      // useLiteralKeys demands the exact opposite ("prefer .HOME"), so the
+      // two tools would fight over every env access; tsc wins and biome
+      // backs off. Scoped to this package because it owns the env access.
+      "includes": ["packages/harness-opencode/**/*.ts"],
+      "linter": {
+        "rules": {
+          "complexity": {
+            "useLiteralKeys": "off"
+          }
+        }
+      }
+    }
+  ],
+  "assist": {
+    "enabled": true
+  }
+}

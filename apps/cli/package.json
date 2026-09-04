@@ -9,9 +9,9 @@
   },
   "dependencies": {
     "@effect/platform-bun": "catalog:",
+    "@know-the-map/git": "workspace:*",
     "@know-the-map/harness": "workspace:*",
     "@know-the-map/harness-opencode": "workspace:*",
-    "@know-the-map/harness-pi": "workspace:*",
     "@know-the-map/hermeneut": "workspace:*",
     "effect": "catalog:"
   }
