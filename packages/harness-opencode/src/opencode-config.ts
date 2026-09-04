@@ -1,8 +1,54 @@
 import { join } from "node:path";
-import { Effect, Option, Schema } from "effect";
+import { Config, Duration, Effect, Option, Schema } from "effect";
 
-// TODO(config): the model belongs to a run configuration, not a constant.
-export const OPENCODE_MODEL = "opencode-go/deepseek-v4-flash";
+/**
+ * Everything the embedded opencode host needs to boot: which model to use,
+ * how long a turn may run, the per-generation token cap, where its scratch
+ * config directory lives, and which MCP servers it may load (see
+ * `mcpServers` below — plumbed but always empty today).
+ */
+export const OpencodeHarnessConfig = Schema.Struct({
+  model: Schema.String,
+  turnTimeout: Schema.Duration,
+  maxGenerationTokens: Schema.Int.pipe(Schema.check(Schema.isGreaterThan(0))),
+  scratchDirectory: Schema.String,
+  mcpServers: Schema.Record(Schema.String, Schema.Unknown),
+});
+export type OpencodeHarnessConfig = Schema.Schema.Type<typeof OpencodeHarnessConfig>;
+
+export const defaultOpencodeHarnessConfig: OpencodeHarnessConfig = {
+  model: "opencode-go/deepseek-v4-flash",
+  turnTimeout: Duration.minutes(15),
+  maxGenerationTokens: 32_768,
+  scratchDirectory: "/tmp/what-the-hunk/opencode",
+  mcpServers: {},
+};
+
+/**
+ * Host boot config, resolved once when `OpencodeHarnessLive` is
+ * constructed — process lifetime, not per-`analyze()`-call. Env-var driven
+ * for now: `apps/cli/src/main.ts` provides every layer before any
+ * command's flags are parsed, so wiring this to CLI flags would need a
+ * bigger restructuring than issue #27 asks for.
+ */
+export const loadOpencodeHarnessConfig: Config.Config<OpencodeHarnessConfig> = Config.all({
+  model: Config.string("KTM_OPENCODE_MODEL").pipe(
+    Config.withDefault(defaultOpencodeHarnessConfig.model),
+  ),
+  turnTimeout: Config.duration("KTM_OPENCODE_TURN_TIMEOUT").pipe(
+    Config.withDefault(defaultOpencodeHarnessConfig.turnTimeout),
+  ),
+  maxGenerationTokens: Config.int("KTM_OPENCODE_MAX_GENERATION_TOKENS").pipe(
+    Config.withDefault(defaultOpencodeHarnessConfig.maxGenerationTokens),
+  ),
+  scratchDirectory: Config.string("KTM_OPENCODE_SCRATCH_DIRECTORY").pipe(
+    Config.withDefault(defaultOpencodeHarnessConfig.scratchDirectory),
+  ),
+  // No env surface yet: enabling any server needs per-server permission
+  // policy that doesn't exist yet. `layerFromConfig` fails loudly if this
+  // is ever non-empty (see opencode-harness.ts).
+  mcpServers: Config.succeed(defaultOpencodeHarnessConfig.mcpServers),
+});
 
 /**
  * The embedded host is configured with the opencode-go provider and with
@@ -15,60 +61,61 @@ export const OPENCODE_MODEL = "opencode-go/deepseek-v4-flash";
  * allow would override them): a headless ask hangs, a blanket allow leaks
  * secrets.
  *
- * TODO(config): this is the whole host policy; it should be loadable from
- * a configuration file once there is more than the analyze slice to
- * configure.
+ * The provider/model catalog (cost, context/output limits, compatibility
+ * flags) stays fixed here: `config.model` only selects which catalog entry
+ * boots (`opencode-harness.ts` guards that the selection actually matches
+ * this catalog). Accepting arbitrary user-supplied cost/limit numbers is a
+ * separate, riskier feature this config doesn't take on.
  */
-export const OPENCODE_CONFIG = {
-  $schema: "https://opencode.ai/config.json",
-  provider: {
-    "opencode-go": {
-      name: "OpenCode Go",
-      package: "@ai-sdk/openai-compatible",
-      env: ["OPENCODE_GO_API_KEY"],
-      settings: { baseURL: "https://opencode.ai/zen/go/v1" },
-      models: {
-        "deepseek-v4-flash": {
-          name: "DeepSeek V4 Flash",
-          settings: { reasoningEffort: "low" },
-          limit: { context: 1_000_000, output: 384_000 },
-          cost: {
-            input: 0.07,
-            output: 0.14,
-            cache: { read: 0.0014, write: 0 },
-          },
-          compatibility: {
-            reasoningField: "reasoning_content",
-            requireReasoning: true,
-            maxTokensField: "max_tokens",
+export const buildHostConfig = (config: OpencodeHarnessConfig) =>
+  ({
+    $schema: "https://opencode.ai/config.json",
+    provider: {
+      "opencode-go": {
+        name: "OpenCode Go",
+        package: "@ai-sdk/openai-compatible",
+        env: ["OPENCODE_GO_API_KEY"],
+        settings: { baseURL: "https://opencode.ai/zen/go/v1" },
+        models: {
+          "deepseek-v4-flash": {
+            name: "DeepSeek V4 Flash",
+            settings: { reasoningEffort: "low" },
+            limit: { context: 1_000_000, output: 384_000 },
+            cost: {
+              input: 0.07,
+              output: 0.14,
+              cache: { read: 0.0014, write: 0 },
+            },
+            compatibility: {
+              reasoningField: "reasoning_content",
+              requireReasoning: true,
+              maxTokensField: "max_tokens",
+            },
           },
         },
       },
     },
-  },
-  permissions: [
-    { action: "edit", resource: "*", effect: "deny" },
-    { action: "bash", resource: "*", effect: "deny" },
-    { action: "webfetch", resource: "*", effect: "deny" },
-    // Nothing may block on user interaction or subagents: the host is
-    // embedded and headless.
-    { action: "question", resource: "*", effect: "deny" },
-    { action: "task", resource: "*", effect: "deny" },
-    // TODO(config): MCP servers can mutate and reach the network with
-    // tool names we cannot predict; gating them per-server needs the same
-    // config story as this ruleset (tracked as an issue).
-    // Reads are explicitly allowed so no path ever lands in "ask".
-    { action: "read", resource: "*", effect: "allow" },
-    { action: "grep", resource: "*", effect: "allow" },
-    { action: "glob", resource: "*", effect: "allow" },
-    { action: "list", resource: "*", effect: "allow" },
-    { action: "websearch", resource: "*", effect: "allow" },
-    { action: "skill", resource: "*", effect: "allow" },
-    { action: "read", resource: "*.env", effect: "deny" },
-    { action: "read", resource: "*.env.*", effect: "deny" },
-    { action: "read", resource: "*.env.example", effect: "allow" },
-  ],
-} as const;
+    mcp: { servers: config.mcpServers },
+    permissions: [
+      { action: "edit", resource: "*", effect: "deny" },
+      { action: "bash", resource: "*", effect: "deny" },
+      { action: "webfetch", resource: "*", effect: "deny" },
+      // Nothing may block on user interaction or subagents: the host is
+      // embedded and headless.
+      { action: "question", resource: "*", effect: "deny" },
+      { action: "task", resource: "*", effect: "deny" },
+      // Reads are explicitly allowed so no path ever lands in "ask".
+      { action: "read", resource: "*", effect: "allow" },
+      { action: "grep", resource: "*", effect: "allow" },
+      { action: "glob", resource: "*", effect: "allow" },
+      { action: "list", resource: "*", effect: "allow" },
+      { action: "websearch", resource: "*", effect: "allow" },
+      { action: "skill", resource: "*", effect: "allow" },
+      { action: "read", resource: "*.env", effect: "deny" },
+      { action: "read", resource: "*.env.*", effect: "deny" },
+      { action: "read", resource: "*.env.example", effect: "allow" },
+    ],
+  }) as const;
 
 const AuthEntry = Schema.Struct({ key: Schema.String });
 
@@ -114,14 +161,12 @@ export const resolveOpenCodeGoApiKey: Effect.Effect<string | undefined> = Effect
  * only config it ever sees. Note this is not the session's working
  * directory: that is passed per session as `location.directory` (see
  * opencode-harness.ts).
- *
- * TODO(config): host bootstrap (scratch directory, model, key handoff)
- * should become a proper init step — tracked as an issue.
  */
-export const OPENCODE_CREATE_OPTIONS = {
-  config: {
-    directory: "/tmp/what-the-hunk/opencode",
-    project: false,
-    content: JSON.stringify(OPENCODE_CONFIG),
-  },
-} as const;
+export const buildCreateOptions = (config: OpencodeHarnessConfig) =>
+  ({
+    config: {
+      directory: config.scratchDirectory,
+      project: false,
+      content: JSON.stringify(buildHostConfig(config)),
+    },
+  }) as const;
