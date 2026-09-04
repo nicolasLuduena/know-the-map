@@ -22,10 +22,10 @@ import {
 import { type Config, Deferred, Duration, Effect, Layer, Option, Ref, Schema } from "effect";
 import {
   buildCreateOptions,
-  defaultOpencodeHarnessConfig,
   loadOpencodeHarnessConfig,
   type OpencodeHarnessConfig,
   resolveOpenCodeGoApiKey,
+  SUPPORTED_MODEL,
 } from "./opencode-config.ts";
 
 const SUBMIT_RESULT_DESCRIPTION =
@@ -260,10 +260,10 @@ export const layerFromConfig = (
       // Guarded here, before any I/O, rather than let an unmatched model
       // surface later inside `pluginSession.create()`.
       yield* guard(
-        config.model === defaultOpencodeHarnessConfig.model,
+        config.model === SUPPORTED_MODEL,
         () =>
           new HostFailureError({
-            message: `unknown model "${config.model}": the opencode-go catalog only serves "${defaultOpencodeHarnessConfig.model}"`,
+            message: `unknown model "${config.model}": the opencode-go catalog only serves "${SUPPORTED_MODEL}"`,
           }),
       );
 
@@ -369,9 +369,10 @@ export const layerFromConfig = (
   );
 
 /**
- * Env-var-driven default: resolves `OpencodeHarnessConfig` once, at layer
- * construction, then builds the harness from it. See
- * `loadOpencodeHarnessConfig` for the env vars and defaults.
+ * Env-driven: resolves `OpencodeHarnessConfig` once, at layer construction,
+ * then builds the harness from it. See `loadOpencodeHarnessConfig` for the
+ * required env vars — none have a fallback, so a missing one fails loudly
+ * with `Config.ConfigError` here rather than booting with a guessed value.
  */
 export const OpencodeHarnessLive: Layer.Layer<
   Harness,

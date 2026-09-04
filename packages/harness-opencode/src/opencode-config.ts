@@ -1,5 +1,5 @@
 import { join } from "node:path";
-import { Config, Duration, Effect, Option, Schema } from "effect";
+import { Config, Effect, Option, Schema } from "effect";
 
 /**
  * Everything the embedded opencode host needs to boot: which model to use,
@@ -16,38 +16,33 @@ export const OpencodeHarnessConfig = Schema.Struct({
 });
 export type OpencodeHarnessConfig = Schema.Schema.Type<typeof OpencodeHarnessConfig>;
 
-export const defaultOpencodeHarnessConfig: OpencodeHarnessConfig = {
-  model: "opencode-go/deepseek-v4-flash",
-  turnTimeout: Duration.minutes(15),
-  maxGenerationTokens: 32_768,
-  scratchDirectory: "/tmp/what-the-hunk/opencode",
-  mcpServers: {},
-};
+/**
+ * The one model `buildHostConfig`'s fixed catalog knows how to serve.
+ * `layerFromConfig` guards that a resolved config's `model` matches this
+ * before booting — not a fallback value, just the catalog's only entry.
+ */
+export const SUPPORTED_MODEL = "opencode-go/deepseek-v4-flash";
 
 /**
  * Host boot config, resolved once when `OpencodeHarnessLive` is
- * constructed — process lifetime, not per-`analyze()`-call. Env-var driven
- * for now: `apps/cli/src/main.ts` provides every layer before any
- * command's flags are parsed, so wiring this to CLI flags would need a
- * bigger restructuring than issue #27 asks for.
+ * constructed — process lifetime, not per-`analyze()`-call. Every field
+ * with an env surface is required: no fallback default, so a missing
+ * `KTM_OPENCODE_*` variable fails loudly with `Config.ConfigError` at boot
+ * instead of silently running with a baked-in value. `apps/cli/src/main.ts`
+ * provides every layer before any command's flags are parsed, so wiring
+ * this to CLI flags instead would need a bigger restructuring than issue
+ * #27 asks for.
  */
 export const loadOpencodeHarnessConfig: Config.Config<OpencodeHarnessConfig> = Config.all({
-  model: Config.string("KTM_OPENCODE_MODEL").pipe(
-    Config.withDefault(defaultOpencodeHarnessConfig.model),
-  ),
-  turnTimeout: Config.duration("KTM_OPENCODE_TURN_TIMEOUT").pipe(
-    Config.withDefault(defaultOpencodeHarnessConfig.turnTimeout),
-  ),
-  maxGenerationTokens: Config.int("KTM_OPENCODE_MAX_GENERATION_TOKENS").pipe(
-    Config.withDefault(defaultOpencodeHarnessConfig.maxGenerationTokens),
-  ),
-  scratchDirectory: Config.string("KTM_OPENCODE_SCRATCH_DIRECTORY").pipe(
-    Config.withDefault(defaultOpencodeHarnessConfig.scratchDirectory),
-  ),
-  // No env surface yet: enabling any server needs per-server permission
-  // policy that doesn't exist yet. `layerFromConfig` fails loudly if this
-  // is ever non-empty (see opencode-harness.ts).
-  mcpServers: Config.succeed(defaultOpencodeHarnessConfig.mcpServers),
+  model: Config.string("KTM_OPENCODE_MODEL"),
+  turnTimeout: Config.duration("KTM_OPENCODE_TURN_TIMEOUT"),
+  maxGenerationTokens: Config.int("KTM_OPENCODE_MAX_GENERATION_TOKENS"),
+  scratchDirectory: Config.string("KTM_OPENCODE_SCRATCH_DIRECTORY"),
+  // No env surface yet, by design, not oversight: enabling any server
+  // needs per-server permission policy that doesn't exist yet.
+  // `layerFromConfig` fails loudly if this is ever non-empty (see
+  // opencode-harness.ts).
+  mcpServers: Config.succeed({}),
 });
 
 /**

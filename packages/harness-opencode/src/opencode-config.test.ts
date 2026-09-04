@@ -2,14 +2,30 @@ import { expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ConfigProvider, Duration, Effect } from "effect";
+import { Config, ConfigProvider, Duration, Effect } from "effect";
 import {
   buildCreateOptions,
   buildHostConfig,
-  defaultOpencodeHarnessConfig,
   loadOpencodeHarnessConfig,
+  type OpencodeHarnessConfig,
   resolveOpenCodeGoApiKey,
+  SUPPORTED_MODEL,
 } from "./opencode-config.ts";
+
+const TEST_CONFIG: OpencodeHarnessConfig = {
+  model: SUPPORTED_MODEL,
+  turnTimeout: Duration.minutes(15),
+  maxGenerationTokens: 32_768,
+  scratchDirectory: "/tmp/what-the-hunk-test/opencode",
+  mcpServers: {},
+};
+
+const REQUIRED_ENV: Record<string, string> = {
+  KTM_OPENCODE_MODEL: TEST_CONFIG.model,
+  KTM_OPENCODE_TURN_TIMEOUT: "15 minutes",
+  KTM_OPENCODE_MAX_GENERATION_TOKENS: String(TEST_CONFIG.maxGenerationTokens),
+  KTM_OPENCODE_SCRATCH_DIRECTORY: TEST_CONFIG.scratchDirectory,
+};
 
 const loadWithEnv = (env: Record<string, string>) =>
   Effect.runPromise(
@@ -18,34 +34,30 @@ const loadWithEnv = (env: Record<string, string>) =>
     ),
   );
 
-test("loadOpencodeHarnessConfig resolves the defaults against an empty environment", async () => {
-  const config = await loadWithEnv({});
-  expect(config).toEqual(defaultOpencodeHarnessConfig);
+test("loadOpencodeHarnessConfig resolves every field from its env var", async () => {
+  const config = await loadWithEnv(REQUIRED_ENV);
+  expect(config.model).toBe(TEST_CONFIG.model);
+  expect(Duration.toMillis(config.turnTimeout)).toBe(Duration.toMillis(TEST_CONFIG.turnTimeout));
+  expect(config.maxGenerationTokens).toBe(TEST_CONFIG.maxGenerationTokens);
+  expect(config.scratchDirectory).toBe(TEST_CONFIG.scratchDirectory);
+  expect(config.mcpServers).toEqual({});
 });
 
-test("loadOpencodeHarnessConfig picks up KTM_OPENCODE_MODEL", async () => {
-  const config = await loadWithEnv({ KTM_OPENCODE_MODEL: "opencode-go/other-model" });
-  expect(config.model).toBe("opencode-go/other-model");
-});
-
-test("loadOpencodeHarnessConfig picks up KTM_OPENCODE_TURN_TIMEOUT", async () => {
-  const config = await loadWithEnv({ KTM_OPENCODE_TURN_TIMEOUT: "5 minutes" });
-  expect(Duration.toMillis(config.turnTimeout)).toBe(Duration.toMillis(Duration.minutes(5)));
-});
-
-test("loadOpencodeHarnessConfig picks up KTM_OPENCODE_MAX_GENERATION_TOKENS", async () => {
-  const config = await loadWithEnv({ KTM_OPENCODE_MAX_GENERATION_TOKENS: "1024" });
-  expect(config.maxGenerationTokens).toBe(1024);
-});
-
-test("loadOpencodeHarnessConfig picks up KTM_OPENCODE_SCRATCH_DIRECTORY", async () => {
-  const config = await loadWithEnv({ KTM_OPENCODE_SCRATCH_DIRECTORY: "/tmp/somewhere-else" });
-  expect(config.scratchDirectory).toBe("/tmp/somewhere-else");
+test("loadOpencodeHarnessConfig has no fallback: a missing env var fails loudly", async () => {
+  const { KTM_OPENCODE_MODEL: _omitted, ...incomplete } = REQUIRED_ENV;
+  const failure = await Effect.runPromise(
+    Effect.flip(
+      loadOpencodeHarnessConfig.pipe(
+        Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnvRecord(incomplete))),
+      ),
+    ),
+  );
+  expect(failure).toBeInstanceOf(Config.ConfigError);
 });
 
 test("buildHostConfig threads the model selection and MCP servers into the host policy", () => {
   const host = buildHostConfig({
-    ...defaultOpencodeHarnessConfig,
+    ...TEST_CONFIG,
     mcpServers: { example: { type: "local", command: ["echo"] } },
   });
   expect(host.mcp).toEqual({ servers: { example: { type: "local", command: ["echo"] } } });
@@ -53,14 +65,11 @@ test("buildHostConfig threads the model selection and MCP servers into the host 
 });
 
 test("buildCreateOptions scopes the scratch directory and embeds the host config", () => {
-  const options = buildCreateOptions({
-    ...defaultOpencodeHarnessConfig,
-    scratchDirectory: "/tmp/custom-scratch",
-  });
+  const options = buildCreateOptions({ ...TEST_CONFIG, scratchDirectory: "/tmp/custom-scratch" });
   expect(options.config.directory).toBe("/tmp/custom-scratch");
   expect(options.config.project).toBe(false);
   expect(JSON.parse(options.config.content)).toEqual(
-    buildHostConfig({ ...defaultOpencodeHarnessConfig, scratchDirectory: "/tmp/custom-scratch" }),
+    buildHostConfig({ ...TEST_CONFIG, scratchDirectory: "/tmp/custom-scratch" }),
   );
 });
 

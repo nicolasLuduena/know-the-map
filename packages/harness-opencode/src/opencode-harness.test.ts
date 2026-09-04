@@ -1,8 +1,16 @@
 import { expect, test } from "bun:test";
 import { HostFailureError } from "@know-the-map/harness";
-import { Effect, Layer } from "effect";
-import { defaultOpencodeHarnessConfig, type OpencodeHarnessConfig } from "./opencode-config.ts";
+import { Duration, Effect, Layer } from "effect";
+import { type OpencodeHarnessConfig, SUPPORTED_MODEL } from "./opencode-config.ts";
 import { layerFromConfig } from "./opencode-harness.ts";
+
+const TEST_CONFIG: OpencodeHarnessConfig = {
+  model: SUPPORTED_MODEL,
+  turnTimeout: Duration.minutes(15),
+  maxGenerationTokens: 32_768,
+  scratchDirectory: "/tmp/what-the-hunk-test/opencode",
+  mcpServers: {},
+};
 
 /**
  * Both guards below run before any I/O (env, filesystem, `OpenCode.create`)
@@ -14,7 +22,7 @@ const buildFails = (config: OpencodeHarnessConfig) =>
 
 test("layerFromConfig rejects a non-empty mcpServers map", async () => {
   const failure = await buildFails({
-    ...defaultOpencodeHarnessConfig,
+    ...TEST_CONFIG,
     mcpServers: { example: { type: "local", command: ["echo"] } },
   });
 
@@ -24,10 +32,7 @@ test("layerFromConfig rejects a non-empty mcpServers map", async () => {
 });
 
 test("layerFromConfig rejects a model outside the fixed catalog", async () => {
-  const failure = await buildFails({
-    ...defaultOpencodeHarnessConfig,
-    model: "opencode-go/some-other-model",
-  });
+  const failure = await buildFails({ ...TEST_CONFIG, model: "opencode-go/some-other-model" });
 
   expect(failure).toBeInstanceOf(HostFailureError);
   expect(failure._tag).toBe("HostFailureError");
