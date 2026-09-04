@@ -9,6 +9,9 @@ export { guard } from "./guard.ts";
 export type {
   HarnessError,
   HarnessExchange,
+  HarnessModelOption,
+  HarnessModelSelection,
+  HarnessModelVariant,
   HarnessSession,
   HarnessSessionConfig,
 } from "./harness.ts";

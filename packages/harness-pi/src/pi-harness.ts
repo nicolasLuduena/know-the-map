@@ -15,6 +15,8 @@ import { Effect, Layer } from "effect";
 export const PiHarnessLive: Layer.Layer<Harness> = Layer.succeed(
   Harness,
   Harness.of({
+    listModels: () =>
+      Effect.fail(new NotImplementedError({ message: "pi harness is not implemented" })),
     start: () => Effect.fail(new NotImplementedError({ message: "pi harness is not implemented" })),
   }),
 );
