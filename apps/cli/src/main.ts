@@ -7,7 +7,7 @@ import { guard, Harness, HostFailureError } from "@know-the-map/harness";
 import { OpencodeHarnessLive } from "@know-the-map/harness-opencode";
 import { defaultAnalysisBounds, Hermeneut, HermeneutLive } from "@know-the-map/hermeneut";
 import { Config, Console, Effect, Layer } from "effect";
-import { Argument, Command, Flag } from "effect/unstable/cli";
+import { Argument, Command, Flag, Prompt } from "effect/unstable/cli";
 import { readHarnessPreferences, writeHarnessPreferences } from "./harness-preferences.ts";
 import { promptHarnessSelection } from "./harness-prompt.ts";
 
@@ -26,18 +26,13 @@ const analyze = Command.make(
       Flag.withFallbackConfig(Config.int("KTM_MAX_HARNESS_CALLS")),
       Flag.withDefault(defaultAnalysisBounds.maxHarnessCalls),
     ),
-    maxDepth: Flag.integer("max-depth").pipe(
-      Flag.withDescription("Maximum component-division depth before the run stops"),
-      Flag.withFallbackConfig(Config.int("KTM_MAX_DEPTH")),
-      Flag.withDefault(defaultAnalysisBounds.maxDepth),
-    ),
     maxClarifications: Flag.integer("max-clarifications").pipe(
       Flag.withDescription("Maximum clarification rounds per model exchange"),
       Flag.withFallbackConfig(Config.int("KTM_MAX_CLARIFICATIONS")),
       Flag.withDefault(defaultAnalysisBounds.maxClarifications),
     ),
   },
-  ({ path, maxHarnessCalls, maxDepth, maxClarifications }) =>
+  ({ path, maxHarnessCalls, maxClarifications }) =>
     Effect.gen(function* () {
       const harness = yield* Harness;
       const hermeneut = yield* Hermeneut;
@@ -55,6 +50,20 @@ const analyze = Command.make(
         Effect.mapError((cause) => new HostFailureError({ message: "prompt cancelled", cause })),
       );
       yield* writeHarnessPreferences(selection.preferences);
+
+      // Interactive like the harness selection above, for the same reason:
+      // a division-depth cap the caller can't see or tune per run is a
+      // silent tradeoff. Not persisted to .ktm/harness.json — that file is
+      // harness-selection state, not an analysis bound.
+      const maxDepth = yield* Prompt.run(
+        Prompt.integer({
+          message: "Max component-division depth",
+          default: defaultAnalysisBounds.maxDepth,
+          min: 1,
+        }),
+      ).pipe(
+        Effect.mapError((cause) => new HostFailureError({ message: "prompt cancelled", cause })),
+      );
 
       const artifact = yield* hermeneut.analyze(path, selection.harness, {
         maxHarnessCalls,
