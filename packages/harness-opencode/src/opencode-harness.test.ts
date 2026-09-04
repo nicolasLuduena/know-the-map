@@ -1,40 +1,62 @@
 import { expect, test } from "bun:test";
-import { HostFailureError } from "@know-the-map/harness";
-import { Duration, Effect, Layer } from "effect";
-import { type OpencodeHarnessConfig, SUPPORTED_MODEL } from "./opencode-config.ts";
-import { layerFromConfig } from "./opencode-harness.ts";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { Effect, Exit, Layer, Scope } from "effect";
+import { OpencodeHarnessLive } from "./opencode-harness.ts";
 
-const TEST_CONFIG: OpencodeHarnessConfig = {
-  model: SUPPORTED_MODEL,
-  turnTimeout: Duration.minutes(15),
-  maxGenerationTokens: 32_768,
-  scratchDirectory: "/tmp/what-the-hunk-test/opencode",
-  mcpServers: {},
+const withAuthHome = async (
+  entries: Record<string, unknown> | undefined,
+  run: () => Promise<void>,
+) => {
+  const previous = process.env["HOME"];
+  const home = mkdtempSync(join(tmpdir(), "ktm-opencode-harness-test-"));
+  process.env["HOME"] = home;
+  try {
+    if (entries !== undefined) {
+      const authDir = join(home, ".local/share/opencode");
+      mkdirSync(authDir, { recursive: true });
+      writeFileSync(join(authDir, "auth.json"), JSON.stringify(entries));
+    }
+    await run();
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+    if (previous === undefined) {
+      delete process.env["HOME"];
+    } else {
+      process.env["HOME"] = previous;
+    }
+  }
 };
 
-/**
- * Both guards below run before any I/O (env, filesystem, `OpenCode.create`)
- * in `layerFromConfig`, so building the layer is enough to observe them —
- * no API key or embedded host is ever touched.
- */
-const buildFails = (config: OpencodeHarnessConfig) =>
-  Effect.runPromise(Effect.flip(Effect.scoped(Layer.build(layerFromConfig(config)))));
-
-test("layerFromConfig rejects a non-empty mcpServers map", async () => {
-  const failure = await buildFails({
-    ...TEST_CONFIG,
-    mcpServers: { example: { type: "local", command: ["echo"] } },
+test("OpencodeHarnessLive boots with zero usable providers in auth.json", async () => {
+  await withAuthHome(undefined, async () => {
+    await Effect.runPromise(Effect.scoped(Layer.build(OpencodeHarnessLive)));
   });
-
-  expect(failure).toBeInstanceOf(HostFailureError);
-  expect(failure._tag).toBe("HostFailureError");
-  expect(failure.message).toContain("MCP servers are not yet supported");
 });
 
-test("layerFromConfig rejects a model outside the fixed catalog", async () => {
-  const failure = await buildFails({ ...TEST_CONFIG, model: "opencode-go/some-other-model" });
+test("OpencodeHarnessLive injects every usable provider's key for the layer's lifetime, restores after teardown", async () => {
+  await withAuthHome(
+    {
+      "opencode-go": { type: "api", key: "test-opencode-go-key" },
+      openrouter: { type: "api", key: "test-openrouter-key" },
+    },
+    async () => {
+      const previousOpencodeKey = process.env["OPENCODE_API_KEY"];
+      const previousOpenrouterKey = process.env["OPENROUTER_API_KEY"];
+      delete process.env["OPENCODE_API_KEY"];
+      delete process.env["OPENROUTER_API_KEY"];
 
-  expect(failure).toBeInstanceOf(HostFailureError);
-  expect(failure._tag).toBe("HostFailureError");
-  expect(failure.message).toContain('unknown model "opencode-go/some-other-model"');
+      const scope = await Effect.runPromise(Scope.make());
+      await Effect.runPromise(Layer.build(OpencodeHarnessLive).pipe(Scope.provide(scope)));
+
+      expect(process.env["OPENCODE_API_KEY"]).toBe("test-opencode-go-key");
+      expect(process.env["OPENROUTER_API_KEY"]).toBe("test-openrouter-key");
+
+      await Effect.runPromise(Scope.close(scope, Exit.void));
+
+      expect(process.env["OPENCODE_API_KEY"]).toBe(previousOpencodeKey);
+      expect(process.env["OPENROUTER_API_KEY"]).toBe(previousOpenrouterKey);
+    },
+  );
 });

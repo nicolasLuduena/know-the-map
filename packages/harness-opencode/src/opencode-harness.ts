@@ -1,13 +1,15 @@
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
-  guard,
   Harness,
   type HarnessError,
   type HarnessExchange,
+  type HarnessModelOption,
   type HarnessSession,
   type HarnessSessionConfig,
   HostFailureError,
   InvalidResultError,
-  MissingApiKeyError,
   NoSubmissionError,
 } from "@know-the-map/harness";
 import { Plugin } from "@opencode-ai/plugin/effect";
@@ -19,13 +21,12 @@ import {
   type SessionMessage,
   Tool,
 } from "@opencode-ai/sdk/effect";
-import { type Config, Deferred, Duration, Effect, Layer, Option, Ref, Schema } from "effect";
+import { Deferred, Duration, Effect, Layer, Option, Ref, Schema } from "effect";
 import {
   buildCreateOptions,
-  loadOpencodeHarnessConfig,
-  type OpencodeHarnessConfig,
-  resolveOpenCodeGoApiKey,
-  SUPPORTED_MODEL,
+  listUsableProviderIds,
+  PROVIDER_ENV_VARS,
+  resolveApiKey,
 } from "./opencode-config.ts";
 
 const SUBMIT_RESULT_DESCRIPTION =
@@ -58,16 +59,18 @@ const BLOCKED_TOOLS = new Set([
  *   domain (`create`/`prompt`/`wait`) as seen from the plugin side.
  * - `pending`: in-flight exchanges keyed by session id. Each entry is the
  *   one-shot Deferred waiting for that session's `submit_result` payload.
- * - `systemPrompt`: what the context hook appends to every generation. The
- *   slice runs one session at a time, so a single Ref suffices.
+ * - `systemPrompt`, `maxGenerationTokens`: read live by the context hook on
+ *   every generation, set by `start()` per session. The slice runs one
+ *   session at a time, so a single Ref each suffices.
  */
 interface HostState {
   readonly session: Deferred.Deferred<Plugin.Context["session"], never>;
   readonly pending: Ref.Ref<ReadonlyMap<string, Deferred.Deferred<unknown, never>>>;
   readonly systemPrompt: Ref.Ref<string>;
+  readonly maxGenerationTokens: Ref.Ref<number>;
 }
 
-const submissionTool = (state: HostState, config: OpencodeHarnessConfig) =>
+const submissionTool = (state: HostState) =>
   Plugin.define({
     id: "what-the-hunk.submit-result",
     effect: (ctx) =>
@@ -112,7 +115,7 @@ const submissionTool = (state: HostState, config: OpencodeHarnessConfig) =>
               type: "text",
               text: yield* Ref.get(state.systemPrompt),
             });
-            event.generation.maxTokens = config.maxGenerationTokens;
+            event.generation.maxTokens = yield* Ref.get(state.maxGenerationTokens);
             event.tools = Object.fromEntries(
               Object.entries(event.tools).filter(([name]) => !BLOCKED_TOOLS.has(name)),
             );
@@ -234,147 +237,156 @@ const sendExchange = Effect.fn("OpencodeHarnessSession.send")(function* <T, I>(
  * session restricted to the `submit_result` tool plus read-only exploration,
  * and one validated payload per `send`.
  */
-export const layerFromConfig = (
-  config: OpencodeHarnessConfig,
-): Layer.Layer<Harness, MissingApiKeyError | HostFailureError> =>
-  Layer.effect(
-    Harness,
-    Effect.gen(function* () {
-      // MCP servers are plumbed but not yet supported: an enabled server
-      // can mutate and reach the network under tool names we can't
-      // predict, so it needs per-server permission policy that doesn't
-      // exist yet — a populated map here would otherwise silently boot a
-      // host that hangs on the first MCP tool call (unmatched actions
-      // fall back to "ask", fatal for a headless run).
-      yield* guard(
-        Object.keys(config.mcpServers).length === 0,
-        () =>
-          new HostFailureError({
-            message:
-              "MCP servers are not yet supported: enabling any server needs per-server permission rules that don't exist yet (see issue #27)",
-          }),
-      );
-
-      // The provider/model catalog itself is fixed (see opencode-config.ts);
-      // `config.model` only selects which entry of that catalog boots.
-      // Guarded here, before any I/O, rather than let an unmatched model
-      // surface later inside `pluginSession.create()`.
-      yield* guard(
-        config.model === SUPPORTED_MODEL,
-        () =>
-          new HostFailureError({
-            message: `unknown model "${config.model}": the opencode-go catalog only serves "${SUPPORTED_MODEL}"`,
-          }),
-      );
-
-      const apiKey = yield* resolveOpenCodeGoApiKey.pipe(
-        Effect.filterOrFail(
-          (key) => key !== undefined,
-          () =>
-            new MissingApiKeyError({
-              message:
-                "no opencode-go API key found; log in to opencode (auth.json is the only key source)",
-            }),
-        ),
-      );
-
-      // The provider reads its key from the env var declared in the host
-      // config (`env: ["OPENCODE_GO_API_KEY"]`). This is a permanent
-      // constraint, not a deferred TODO: the embedded host's own
-      // `ServerOptions` (checked against @opencode-ai/server's types)
-      // exposes no key parameter at all, and its credential API only
-      // renames or removes *stored* credentials. So we inject the
-      // variable for exactly the lifetime of the host and restore the
-      // previous value after — keeping the key out of any config file
-      // written to disk. Revisit only if the SDK ever grows a scoped key
-      // parameter.
+export const OpencodeHarnessLive: Layer.Layer<Harness, HostFailureError> = Layer.effect(
+  Harness,
+  Effect.gen(function* () {
+    // Inject every provider we have a usable auth.json credential for, once,
+    // before the host boots. Confirmed live: opencode.model.list() only
+    // shows providers already authenticated at OpenCode.create() time, so
+    // this can't be deferred to after an interactive pick — it has to
+    // happen first, for everything we might offer. Layer-scoped, same shape
+    // as before this changed, just looped over more than one provider.
+    const usableProviders = yield* listUsableProviderIds;
+    for (const providerId of usableProviders) {
+      const envVar = PROVIDER_ENV_VARS[providerId];
+      if (envVar === undefined) {
+        continue;
+      }
+      const apiKey = yield* resolveApiKey(providerId);
+      if (apiKey === undefined) {
+        continue;
+      }
       yield* Effect.acquireRelease(
         Effect.sync(() => {
-          const previous = process.env["OPENCODE_GO_API_KEY"];
-          process.env["OPENCODE_GO_API_KEY"] = apiKey;
+          const previous = process.env[envVar];
+          process.env[envVar] = apiKey;
           return previous;
         }),
         (previous) =>
           Effect.sync(() => {
             if (previous === undefined) {
-              delete process.env["OPENCODE_GO_API_KEY"];
+              delete process.env[envVar];
             } else {
-              process.env["OPENCODE_GO_API_KEY"] = previous;
+              process.env[envVar] = previous;
             }
           }),
       );
+    }
 
-      const opencode = yield* OpenCode.create(buildCreateOptions(config)).pipe(
+    // Ephemeral: a fresh scratch directory per boot, not a fixed shared
+    // path. A single hardcoded path would let two concurrent runs (or a
+    // crashed prior run) collide or leak state into each other.
+    const scratchDirectory = yield* Effect.acquireRelease(
+      Effect.sync(() => mkdtempSync(join(tmpdir(), "ktm-opencode-"))),
+      (dir) => Effect.sync(() => rmSync(dir, { recursive: true, force: true })),
+    );
+
+    const opencode = yield* OpenCode.create(buildCreateOptions(scratchDirectory)).pipe(
+      Effect.mapError(
+        (cause) => new HostFailureError({ message: "OpenCode.create() failed", cause }),
+      ),
+    );
+
+    const state: HostState = {
+      session: yield* Deferred.make<Plugin.Context["session"], never>(),
+      pending: yield* Ref.make<ReadonlyMap<string, Deferred.Deferred<unknown, never>>>(new Map()),
+      systemPrompt: yield* Ref.make(""),
+      maxGenerationTokens: yield* Ref.make(0), // overwritten by start() before it's ever read
+    };
+
+    yield* opencode
+      .plugin(submissionTool(state))
+      .pipe(
         Effect.mapError(
-          (cause) => new HostFailureError({ message: "OpenCode.create() failed", cause }),
+          (cause) => new HostFailureError({ message: "plugin registration failed", cause }),
         ),
       );
+    // Plugin booting is lazy: `list()` is what makes the host instantiate
+    // the registration, whose effect resolves `state.session`. The only
+    // plugin we register is `submit_result` itself; we rely on no other
+    // plugin behavior.
+    yield* opencode.plugin
+      .list()
+      .pipe(
+        Effect.mapError(
+          (cause) => new HostFailureError({ message: "plugin activation failed", cause }),
+        ),
+      );
+    const pluginSession = yield* Deferred.await(state.session);
 
-      const model = Model.Ref.parse(config.model);
-
-      const state: HostState = {
-        session: yield* Deferred.make<Plugin.Context["session"], never>(),
-        pending: yield* Ref.make<ReadonlyMap<string, Deferred.Deferred<unknown, never>>>(new Map()),
-        systemPrompt: yield* Ref.make(""),
-      };
-
-      yield* opencode
-        .plugin(submissionTool(state, config))
-        .pipe(
-          Effect.mapError(
-            (cause) => new HostFailureError({ message: "plugin registration failed", cause }),
-          ),
-        );
-      // Plugin booting is lazy: `list()` is what makes the host instantiate
-      // the registration, whose effect resolves `state.session`. The only
-      // plugin we register is `submit_result` itself; we rely on no other
-      // plugin behavior.
-      yield* opencode.plugin
+    const listModels = Effect.fn("Harness.listModels")(function* (): Effect.fn.Return<
+      ReadonlyArray<HarnessModelOption>,
+      HarnessError
+    > {
+      const catalog = yield* opencode.model
         .list()
         .pipe(
           Effect.mapError(
-            (cause) => new HostFailureError({ message: "plugin activation failed", cause }),
+            (cause) => new HostFailureError({ message: "model.list() failed", cause }),
           ),
         );
-      const pluginSession = yield* Deferred.await(state.session);
+      // No usable-provider filter needed here: whatever comes back already
+      // reflects exactly what's authenticated (confirmed live above),
+      // including the legitimate no-auth "opencode" tier — a real option,
+      // not noise.
+      return catalog.data
+        .filter((model) => model.enabled)
+        .map((model) => ({
+          providerId: model.providerID,
+          modelId: model.id,
+          modelName: model.name,
+          variants: model.variants.map((variant) => ({ id: variant.id })),
+          limit: model.limit,
+          cost:
+            model.cost.length === 0
+              ? undefined
+              : model.cost.map((tier) => ({ input: tier.input, output: tier.output })),
+        }));
+    });
 
-      const start = Effect.fn("Harness.start")(function* (
-        sessionConfig: HarnessSessionConfig,
-      ): Effect.fn.Return<HarnessSession, HarnessError> {
-        yield* Ref.set(state.systemPrompt, sessionConfig.systemPrompt);
-        const created = yield* pluginSession
-          .create({
-            title: "ktm analyze",
-            model,
-            // The session's working directory: file tools of the analyze
-            // agent are scoped to the repository under analysis, not to
-            // wherever the host process happens to run.
-            location: { directory: Location.Ref.fields.directory.make(sessionConfig.directory) },
-          })
-          .pipe(
-            Effect.mapError(
-              (cause) => new HostFailureError({ message: "sessions.create() failed", cause }),
-            ),
-          );
+    const start = Effect.fn("Harness.start")(function* (
+      sessionConfig: HarnessSessionConfig,
+    ): Effect.fn.Return<HarnessSession, HarnessError> {
+      yield* Ref.set(state.systemPrompt, sessionConfig.systemPrompt);
+      yield* Ref.set(state.maxGenerationTokens, sessionConfig.maxGenerationTokens);
 
-        return {
-          send: <T, I>(exchange: HarnessExchange<T, I>) =>
-            sendExchange(state, opencode, pluginSession, created.id, exchange, config.turnTimeout),
-          close: () => Effect.void,
-        };
+      // Schema.decodeSync against the whole Ref struct, not individual
+      // branded-field constructors — a certain, standard API either way.
+      const model = Schema.decodeSync(Model.Ref)({
+        id: sessionConfig.model.modelId,
+        providerID: sessionConfig.model.providerId,
+        variant: sessionConfig.model.variantId,
       });
 
-      return Harness.of({ start });
-    }),
-  );
+      const created = yield* pluginSession
+        .create({
+          title: "ktm analyze",
+          model,
+          // The session's working directory: file tools of the analyze
+          // agent are scoped to the repository under analysis, not to
+          // wherever the host process happens to run.
+          location: { directory: Location.Ref.fields.directory.make(sessionConfig.directory) },
+        })
+        .pipe(
+          Effect.mapError(
+            (cause) => new HostFailureError({ message: "sessions.create() failed", cause }),
+          ),
+        );
 
-/**
- * Env-driven: resolves `OpencodeHarnessConfig` once, at layer construction,
- * then builds the harness from it. See `loadOpencodeHarnessConfig` for the
- * required env vars — none have a fallback, so a missing one fails loudly
- * with `Config.ConfigError` here rather than booting with a guessed value.
- */
-export const OpencodeHarnessLive: Layer.Layer<
-  Harness,
-  Config.ConfigError | MissingApiKeyError | HostFailureError
-> = Layer.unwrap(loadOpencodeHarnessConfig.pipe(Effect.map(layerFromConfig)));
+      return {
+        send: <T, I>(exchange: HarnessExchange<T, I>) =>
+          sendExchange(
+            state,
+            opencode,
+            pluginSession,
+            created.id,
+            exchange,
+            sessionConfig.turnTimeout,
+          ),
+        close: () => Effect.void, // no per-session auth state to release — that's boot-scoped now
+      };
+    });
+
+    return Harness.of({ listModels, start });
+  }),
+);
