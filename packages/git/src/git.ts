@@ -148,6 +148,7 @@ export const GitLive: Layer.Layer<Git, never, ChildProcessSpawner.ChildProcessSp
             const [stdout, stderr] = yield* Effect.zip(
               handle.stdout.pipe(Stream.decodeText(), Stream.mkString),
               handle.stderr.pipe(Stream.decodeText(), Stream.mkString),
+              { concurrent: true },
             ).pipe(
               Effect.mapError(
                 (cause) =>
