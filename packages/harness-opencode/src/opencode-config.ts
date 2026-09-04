@@ -56,11 +56,15 @@ export const loadOpencodeHarnessConfig: Config.Config<OpencodeHarnessConfig> = C
  * allow would override them): a headless ask hangs, a blanket allow leaks
  * secrets.
  *
- * The provider/model catalog (cost, context/output limits, compatibility
- * flags) stays fixed here: `config.model` only selects which catalog entry
- * boots (`opencode-harness.ts` guards that the selection actually matches
- * this catalog). Accepting arbitrary user-supplied cost/limit numbers is a
- * separate, riskier feature this config doesn't take on.
+ * The provider/model catalog stays fixed here: `config.model` only selects
+ * which catalog entry boots (`opencode-harness.ts` guards that the
+ * selection actually matches this catalog). `cost` and `limit` are
+ * deliberately omitted — both are optional per opencode's own Model schema
+ * and exist only to feed opencode's own dollar-cost/context-limit
+ * accounting; we don't rely on either today. `compatibility` stays: it
+ * tells the openai-compatible adapter how to read this specific model's
+ * reasoning output and token-limit parameter, which plausibly affects
+ * whether requests parse correctly, not just bookkeeping.
  */
 export const buildHostConfig = (config: OpencodeHarnessConfig) =>
   ({
@@ -75,12 +79,6 @@ export const buildHostConfig = (config: OpencodeHarnessConfig) =>
           "deepseek-v4-flash": {
             name: "DeepSeek V4 Flash",
             settings: { reasoningEffort: "low" },
-            limit: { context: 1_000_000, output: 384_000 },
-            cost: {
-              input: 0.07,
-              output: 0.14,
-              cache: { read: 0.0014, write: 0 },
-            },
             compatibility: {
               reasoningField: "reasoning_content",
               requireReasoning: true,
