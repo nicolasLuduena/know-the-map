@@ -358,7 +358,11 @@ test("divisions nested beyond the max depth fail loudly", async () => {
       relationships: [],
       interpretations: [],
     });
-  const { outcome } = await runAnalysis([nested(1), nested(10), nested(20), nested(30)]);
+  const { outcome } = await runAnalysis([nested(1), nested(10), nested(20), nested(30)], {
+    maxHarnessCalls: 48,
+    maxDepth: 3,
+    maxClarifications: 3,
+  });
 
   expect(outcome._tag).toBe("Left");
   if (outcome._tag !== "Left") return;

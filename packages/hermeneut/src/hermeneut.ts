@@ -35,7 +35,7 @@ export type AnalysisBounds = Schema.Schema.Type<typeof AnalysisBounds>;
 
 export const defaultAnalysisBounds: AnalysisBounds = {
   maxHarnessCalls: 48,
-  maxDepth: 3,
+  maxDepth: 7,
   maxClarifications: 3,
 };
 
