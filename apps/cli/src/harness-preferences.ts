@@ -15,11 +15,15 @@ export const HarnessPreferences = Schema.Struct({
 });
 export type HarnessPreferences = Schema.Schema.Type<typeof HarnessPreferences>;
 
-const PREFERENCES_PATH = join(".ktm", "harness.json");
+// Namespaced by adapter (opencode vs. a future pi) so two harnesses'
+// remembered choices never collide or overwrite each other.
+const PREFERENCES_DIR = join(".ktm", "harness");
+const PREFERENCES_PATH = join(PREFERENCES_DIR, "opencode.json");
 
 /**
- * A missing or malformed `.ktm/harness.json` is "no saved preferences",
- * never a failure — the prompts just start with no pre-selected default.
+ * A missing or malformed `.ktm/harness/opencode.json` is "no saved
+ * preferences", never a failure — the prompts just start with no
+ * pre-selected default.
  */
 export const readHarnessPreferences: Effect.Effect<Option.Option<HarnessPreferences>> = Effect.gen(
   function* () {
@@ -36,7 +40,7 @@ export const readHarnessPreferences: Effect.Effect<Option.Option<HarnessPreferen
 
 export const writeHarnessPreferences = (preferences: HarnessPreferences): Effect.Effect<void> =>
   Effect.gen(function* () {
-    yield* Effect.sync(() => mkdirSync(".ktm", { recursive: true }));
+    yield* Effect.sync(() => mkdirSync(PREFERENCES_DIR, { recursive: true }));
     const encoded = yield* Schema.encodeEffect(HarnessPreferences)(preferences).pipe(Effect.orDie);
     yield* Effect.tryPromise(() =>
       Bun.write(PREFERENCES_PATH, `${JSON.stringify(encoded, null, 2)}\n`),

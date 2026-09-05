@@ -53,8 +53,8 @@ const analyze = Command.make(
 
       // Interactive like the harness selection above, for the same reason:
       // a division-depth cap the caller can't see or tune per run is a
-      // silent tradeoff. Not persisted to .ktm/harness.json — that file is
-      // harness-selection state, not an analysis bound.
+      // silent tradeoff. Not persisted to .ktm/harness/opencode.json — that
+      // file is harness-selection state, not an analysis bound.
       const maxDepth = yield* Prompt.run(
         Prompt.integer({
           message: "Max component-division depth",
