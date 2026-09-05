@@ -1,6 +1,6 @@
 export { AnalysisBoundExceededError } from "./errors.ts";
-export type { AnalyzeError } from "./hermeneut.ts";
-export { Hermeneut, HermeneutLive } from "./hermeneut.ts";
+export type { AnalyzeError, HarnessSelection } from "./hermeneut.ts";
+export { AnalysisBounds, defaultAnalysisBounds, Hermeneut, HermeneutLive } from "./hermeneut.ts";
 export { clarificationPrompt, SYSTEM_PROMPT, scopePrompt } from "./prompts.ts";
 export {
   AnalysisArtifact,

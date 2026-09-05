@@ -1,4 +1,4 @@
-import { Context, Effect, Layer, type Schema } from "effect";
+import { Context, type Duration, Effect, Layer, type Schema } from "effect";
 import {
   type HostFailureError,
   type InvalidResultError,
@@ -7,11 +7,42 @@ import {
   NotImplementedError,
 } from "./errors.ts";
 
+/** One provider+model+variant a caller has selected for a session. */
+export interface HarnessModelSelection {
+  readonly providerId: string;
+  readonly modelId: string;
+  readonly variantId?: string;
+}
+
+/**
+ * One provider+model `listModels()` may offer. Already filtered to what
+ * this harness can actually run — every option here is usable.
+ */
+export interface HarnessModelOption {
+  readonly providerId: string;
+  readonly modelId: string;
+  readonly modelName: string;
+  /** Reasoning/configuration variant ids this model offers, if any. */
+  readonly variants: ReadonlyArray<string>;
+  readonly limit: {
+    readonly context: number;
+    readonly output: number;
+    readonly input?: number;
+  };
+  readonly cost?: ReadonlyArray<{ readonly input: number; readonly output: number }>;
+}
+
 export interface HarnessSessionConfig {
   /** Absolute path of the repository the session is pointed at. */
   readonly directory: string;
   /** Fixed instruction block applied to every exchange of the session. */
   readonly systemPrompt: string;
+  /** Which provider/model/variant this session runs against. */
+  readonly model: HarnessModelSelection;
+  /** Budget for one model turn (prompt + wait) before it fails loudly. */
+  readonly turnTimeout: Duration.Duration;
+  /** Per-generation output token cap. */
+  readonly maxGenerationTokens: number;
 }
 
 export interface HarnessExchange<T, I> {
@@ -42,6 +73,8 @@ export interface HarnessSession {
 export class Harness extends Context.Service<
   Harness,
   {
+    /** Every provider+model this harness can actually run, right now. */
+    listModels(): Effect.Effect<ReadonlyArray<HarnessModelOption>, HarnessError>;
     start(config: HarnessSessionConfig): Effect.Effect<HarnessSession, HarnessError>;
   }
 >()("@know-the-map/harness/Harness") {}
@@ -63,6 +96,8 @@ export type HarnessError =
 export const HarnessStub: Layer.Layer<Harness> = Layer.succeed(
   Harness,
   Harness.of({
+    listModels: () =>
+      Effect.fail(new NotImplementedError({ message: "harness is not implemented" })),
     start: () => Effect.fail(new NotImplementedError({ message: "harness is not implemented" })),
   }),
 );

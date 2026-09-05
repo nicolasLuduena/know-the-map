@@ -3,10 +3,13 @@ import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { BunRuntime, BunServices } from "@effect/platform-bun";
 import { GitLive } from "@know-the-map/git";
+import { guard, Harness, HostFailureError } from "@know-the-map/harness";
 import { OpencodeHarnessLive } from "@know-the-map/harness-opencode";
-import { Hermeneut, HermeneutLive } from "@know-the-map/hermeneut";
-import { Console, Effect, Layer } from "effect";
-import { Argument, Command } from "effect/unstable/cli";
+import { defaultAnalysisBounds, Hermeneut, HermeneutLive } from "@know-the-map/hermeneut";
+import { Config, Console, Effect, Layer } from "effect";
+import { Argument, Command, Flag, Prompt } from "effect/unstable/cli";
+import { readHarnessPreferences, writeHarnessPreferences } from "./harness-preferences.ts";
+import { promptHarnessSelection } from "./harness-prompt.ts";
 
 const VERSION = "0.0.0";
 const OUTPUT_PATH = join(".ktm", "analysis.json");
@@ -18,11 +21,55 @@ const analyze = Command.make(
       Argument.withDescription("Directory inside the repository to analyze"),
       Argument.withDefault("."),
     ),
+    maxHarnessCalls: Flag.integer("max-harness-calls").pipe(
+      Flag.withDescription("Maximum model calls before the run stops"),
+      Flag.withFallbackConfig(Config.int("KTM_MAX_HARNESS_CALLS")),
+      Flag.withDefault(defaultAnalysisBounds.maxHarnessCalls),
+    ),
+    maxClarifications: Flag.integer("max-clarifications").pipe(
+      Flag.withDescription("Maximum clarification rounds per model exchange"),
+      Flag.withFallbackConfig(Config.int("KTM_MAX_CLARIFICATIONS")),
+      Flag.withDefault(defaultAnalysisBounds.maxClarifications),
+    ),
   },
-  ({ path }) =>
+  ({ path, maxHarnessCalls, maxClarifications }) =>
     Effect.gen(function* () {
+      const harness = yield* Harness;
       const hermeneut = yield* Hermeneut;
-      const artifact = yield* hermeneut.analyze(path);
+
+      const options = yield* harness.listModels();
+      yield* guard(
+        options.length > 0,
+        () =>
+          new HostFailureError({
+            message: "no usable provider found — check ~/.local/share/opencode/auth.json",
+          }),
+      );
+      const defaults = yield* readHarnessPreferences;
+      const selection = yield* promptHarnessSelection(options, defaults).pipe(
+        Effect.mapError((cause) => new HostFailureError({ message: "prompt cancelled", cause })),
+      );
+      yield* writeHarnessPreferences(selection.preferences);
+
+      // Interactive like the harness selection above, for the same reason:
+      // a division-depth cap the caller can't see or tune per run is a
+      // silent tradeoff. Not persisted to .ktm/harness/opencode.json — that
+      // file is harness-selection state, not an analysis bound.
+      const maxDepth = yield* Prompt.run(
+        Prompt.integer({
+          message: "Max component-division depth",
+          default: defaultAnalysisBounds.maxDepth,
+          min: 1,
+        }),
+      ).pipe(
+        Effect.mapError((cause) => new HostFailureError({ message: "prompt cancelled", cause })),
+      );
+
+      const artifact = yield* hermeneut.analyze(path, selection.harness, {
+        maxHarnessCalls,
+        maxDepth,
+        maxClarifications,
+      });
       yield* Effect.sync(() => mkdirSync(".ktm", { recursive: true }));
       yield* Effect.tryPromise(() =>
         Bun.write(OUTPUT_PATH, `${JSON.stringify(artifact, null, 2)}\n`),
@@ -42,11 +89,13 @@ const cli = Command.make("ktm").pipe(
 cli.pipe(
   Command.run({ version: VERSION }),
   Effect.provide(
-    HermeneutLive.pipe(
-      Layer.provide(Layer.provide(GitLive, BunServices.layer)),
-      Layer.provide(OpencodeHarnessLive),
-      Layer.provideMerge(BunServices.layer),
-    ),
+    Layer.mergeAll(
+      HermeneutLive.pipe(
+        Layer.provide(Layer.provide(GitLive, BunServices.layer)),
+        Layer.provide(OpencodeHarnessLive),
+      ),
+      OpencodeHarnessLive,
+    ).pipe(Layer.provideMerge(BunServices.layer)),
   ),
   BunRuntime.runMain,
 );

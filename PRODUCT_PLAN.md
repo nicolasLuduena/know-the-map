@@ -112,11 +112,11 @@ budgets, recursion, concurrency, and cancellation are bounded by the application
 
 ### The harness is replaceable
 
-Pi is the first embedded execution harness. Know the Map owns orchestration,
-schemas, evidence validation, freshness, and publication; Pi owns each bounded
+OpenCode is the first embedded execution harness. Know the Map owns orchestration,
+schemas, evidence validation, freshness, and publication; OpenCode owns each bounded
 model session, its tools, provider selection, and streaming.
 
-OpenCode and other harnesses may be added later. A direct model integration would
+Pi and other harnesses may be added later. A direct model integration would
 turn Know the Map into its own native harness and may enable tighter orchestration,
 but that expansion is outside the MVP.
 

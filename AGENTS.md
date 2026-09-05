@@ -30,7 +30,15 @@ interactively — stays on the normal `gh` session.
 - Bun workspaces: `packages/*` (libraries) and `apps/*` (executables).
 - Shared dependency versions live in the `catalog` of the root `package.json`
   and are referenced with the `catalog:` protocol.
-- `harness-probe/` is a standalone probe kept for reference; it is not part of
-  the workspace graph. Ideas are transplanted from it manually.
 - All implementations that are not designed yet fail loudly with
   `NotImplementedError` from `@know-the-map/harness`.
+
+# Permissions and embedded hosts
+
+An embedded host (e.g. the OpenCode adapter in `packages/harness-opencode`)
+runs headless — nothing can block on a human answering an `"ask"` prompt.
+Every permission action the host can reach needs an explicit `allow`/`deny`
+rule; never rely on the framework's unmatched-action default. Reads outside
+the session's own directory go through a distinct action from a normal
+read (e.g. OpenCode's `external_directory`) — check the host's own
+path-resolution source before assuming one rule covers both.

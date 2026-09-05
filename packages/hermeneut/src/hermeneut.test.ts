@@ -8,10 +8,17 @@ import {
   InvalidResultError,
   NoSubmissionError,
 } from "@know-the-map/harness";
-import { Effect, Layer, Schema } from "effect";
+import { Duration, Effect, Layer, Schema } from "effect";
 import { AnalysisBoundExceededError } from "./errors.ts";
+import type { AnalysisBounds, HarnessSelection } from "./hermeneut.ts";
 import { Hermeneut, HermeneutLive } from "./hermeneut.ts";
 import type { AnalysisArtifact } from "./schemas.ts";
+
+const TEST_HARNESS_SELECTION: HarnessSelection = {
+  model: { providerId: "opencode-go", modelId: "deepseek-v4-flash" },
+  turnTimeout: Duration.minutes(15),
+  maxGenerationTokens: 32_768,
+};
 
 /**
  * The mock git service and the mock harness share this fixture: scripted
@@ -53,6 +60,7 @@ const scriptHarness = (
   Layer.succeed(
     Harness,
     Harness.of({
+      listModels: () => Effect.succeed([]),
       start: () =>
         Effect.sync(() => {
           const queue = [...script];
@@ -83,11 +91,11 @@ const scriptHarness = (
     }),
   );
 
-const runAnalysis = async (script: ReadonlyArray<unknown>) => {
+const runAnalysis = async (script: ReadonlyArray<unknown>, bounds?: AnalysisBounds) => {
   const sent: Array<{ prompt: string; payload: unknown }> = [];
   const program = Effect.gen(function* () {
     const hermeneut = yield* Hermeneut;
-    return yield* hermeneut.analyze(".");
+    return yield* hermeneut.analyze(".", TEST_HARNESS_SELECTION, bounds);
   }).pipe(
     Effect.provide(
       HermeneutLive.pipe(Layer.provide(MockGit), Layer.provide(scriptHarness(script, sent))),
@@ -315,6 +323,34 @@ test("reaching the harness-call bound fails loudly", async () => {
   expect(sent).toHaveLength(48);
 });
 
+test("a custom maxHarnessCalls bound is honored, not just the default", async () => {
+  const script: Array<unknown> = [
+    division({
+      components: Array.from({ length: 3 }, (_, index) => ({
+        id: index + 1,
+        name: `c${index}`,
+        summary: "leaf",
+        files: ["src/a.ts"],
+      })),
+      relationships: [],
+      interpretations: [],
+    }),
+    module(100, "src/a.ts"),
+    module(101, "src/a.ts"),
+  ];
+  const { outcome, sent } = await runAnalysis(script, {
+    maxHarnessCalls: 2,
+    maxDepth: 3,
+    maxClarifications: 3,
+  });
+
+  expect(outcome._tag).toBe("Left");
+  if (outcome._tag !== "Left") return;
+  expect(outcome.left).toBeInstanceOf(AnalysisBoundExceededError);
+  expect(outcome.left.message).toContain("2 model calls");
+  expect(sent).toHaveLength(2);
+});
+
 test("divisions nested beyond the max depth fail loudly", async () => {
   const nested = (base: number) =>
     division({
@@ -322,7 +358,11 @@ test("divisions nested beyond the max depth fail loudly", async () => {
       relationships: [],
       interpretations: [],
     });
-  const { outcome } = await runAnalysis([nested(1), nested(10), nested(20), nested(30)]);
+  const { outcome } = await runAnalysis([nested(1), nested(10), nested(20), nested(30)], {
+    maxHarnessCalls: 48,
+    maxDepth: 3,
+    maxClarifications: 3,
+  });
 
   expect(outcome._tag).toBe("Left");
   if (outcome._tag !== "Left") return;
