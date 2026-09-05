@@ -1,8 +1,8 @@
 import { expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Effect } from "effect";
+import { Effect, Exit } from "effect";
 import {
   buildCreateOptions,
   buildHostConfig,
@@ -85,6 +85,29 @@ test("resolveApiKey returns undefined when the auth file is malformed JSON", asy
     writeFileSync(join(authDir, "auth.json"), "not json");
     expect(await Effect.runPromise(resolveApiKey("opencode-go"))).toBeUndefined();
   } finally {
+    rmSync(home, { recursive: true, force: true });
+    if (previous === undefined) {
+      delete process.env["HOME"];
+    } else {
+      process.env["HOME"] = previous;
+    }
+  }
+});
+
+test("resolveApiKey fails loudly when auth.json exists but isn't readable", async () => {
+  const previous = process.env["HOME"];
+  const home = mkdtempSync(join(tmpdir(), "ktm-opencode-auth-"));
+  process.env["HOME"] = home;
+  const authDir = join(home, ".local/share/opencode");
+  mkdirSync(authDir, { recursive: true });
+  const authFile = join(authDir, "auth.json");
+  writeFileSync(authFile, JSON.stringify({ "opencode-go": { type: "api", key: "x" } }));
+  chmodSync(authFile, 0o000);
+  try {
+    const exit = await Effect.runPromiseExit(resolveApiKey("opencode-go"));
+    expect(Exit.isFailure(exit)).toBe(true);
+  } finally {
+    chmodSync(authFile, 0o600);
     rmSync(home, { recursive: true, force: true });
     if (previous === undefined) {
       delete process.env["HOME"];

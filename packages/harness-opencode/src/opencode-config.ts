@@ -1,4 +1,5 @@
 import { join } from "node:path";
+import { HostFailureError } from "@know-the-map/harness";
 import type { OpenCode } from "@opencode-ai/sdk/effect";
 import { Effect, Option, Schema } from "effect";
 
@@ -63,32 +64,57 @@ export const buildHostConfig = () =>
 
 const AuthEntry = Schema.Struct({ type: Schema.Literal("api"), key: Schema.String });
 
-/** Reads opencode's auth file as a raw record; `{}` if missing or unparseable. */
-const readAuthEntries: Effect.Effect<Record<string, unknown>> = Effect.gen(function* () {
-  const home = process.env["HOME"];
-  if (home === undefined) {
-    return {};
-  }
-  const authFile = join(home, ".local/share/opencode/auth.json");
-  const contents = yield* Effect.tryPromise({
-    try: () => Bun.file(authFile).json(),
-    catch: (cause) => cause,
-  }).pipe(Effect.option);
-  if (Option.isNone(contents)) {
-    return {};
-  }
-  return Option.getOrElse(
-    Schema.decodeUnknownOption(Schema.Record(Schema.String, Schema.Unknown))(contents.value),
-    () => ({}),
-  );
-});
+const isPermissionError = (cause: unknown): boolean =>
+  typeof cause === "object" &&
+  cause !== null &&
+  ((cause as NodeJS.ErrnoException).code === "EACCES" ||
+    (cause as NodeJS.ErrnoException).code === "EPERM");
+
+/**
+ * Reads opencode's auth file as a raw record. Missing or unparseable both
+ * mean "{}" (indistinguishable from "not logged in yet" — nothing to
+ * report). A permission error reading the file is different: it means a key
+ * may genuinely be there but we can't see it, so it's surfaced as a real
+ * failure instead of silently looking identical to "not logged in".
+ */
+const readAuthEntries: Effect.Effect<Record<string, unknown>, HostFailureError> = Effect.gen(
+  function* () {
+    const home = process.env["HOME"];
+    if (home === undefined) {
+      return {};
+    }
+    const authFile = join(home, ".local/share/opencode/auth.json");
+    const contents = yield* Effect.tryPromise({
+      try: () => Bun.file(authFile).json(),
+      catch: (cause) => cause,
+    }).pipe(
+      Effect.map(Option.some),
+      Effect.catchIf(
+        (cause) => !isPermissionError(cause),
+        () => Effect.succeed(Option.none()),
+      ),
+      Effect.mapError(
+        (cause) => new HostFailureError({ message: `cannot read ${authFile}`, cause }),
+      ),
+    );
+    if (Option.isNone(contents)) {
+      return {};
+    }
+    return Option.getOrElse(
+      Schema.decodeUnknownOption(Schema.Record(Schema.String, Schema.Unknown))(contents.value),
+      () => ({}),
+    );
+  },
+);
 
 /**
  * The API key comes exclusively from opencode's auth file — no env var
  * fallback. Only `type: "api"` entries are usable; other auth types
  * (OAuth, etc.) are out of scope here (tracked: #33).
  */
-export const resolveApiKey = (providerID: string): Effect.Effect<string | undefined> =>
+export const resolveApiKey = (
+  providerID: string,
+): Effect.Effect<string | undefined, HostFailureError> =>
   readAuthEntries.pipe(
     Effect.map((entries) =>
       Option.getOrUndefined(
@@ -104,7 +130,10 @@ export const resolveApiKey = (providerID: string): Effect.Effect<string | undefi
  * auth.json) and inject a key for (`PROVIDER_ENV_VARS`). Drives which
  * providers `OpencodeHarnessLive` authenticates at boot.
  */
-export const listUsableProviderIds: Effect.Effect<ReadonlyArray<string>> = readAuthEntries.pipe(
+export const listUsableProviderIds: Effect.Effect<
+  ReadonlyArray<string>,
+  HostFailureError
+> = readAuthEntries.pipe(
   Effect.map((entries) =>
     Object.keys(PROVIDER_ENV_VARS).filter((id) =>
       Option.isSome(Schema.decodeUnknownOption(AuthEntry)(entries[id])),
