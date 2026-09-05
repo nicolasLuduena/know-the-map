@@ -84,5 +84,22 @@ output).
 ## Monorepo
 
 `catalog:` shared versions, `workspace:*` internal, `@know-the-map/*` scope;
-`packages/*` libs, `apps/*` executables. `harness-probe/` reference-only:
-transplant, never import.
+`packages/*` libs, `apps/*` executables. Per-adapter state (preferences,
+caches) lives under `.ktm/<kind>/<adapter-id>.json` — never a flat shared
+file two adapters could collide on.
+
+## Permissions
+
+A headless host must never let a permission check reach the framework's own
+unmatched-action default (typically `"ask"`) — that hangs a run with no
+human to answer it. List every action the host can reach with an explicit
+`allow`/`deny`; rules evaluate last-match-wins, so ordering matters as much
+as coverage.
+
+## Reading optional external state
+
+A config or credential file that might not exist (auth store, preferences)
+treats "missing" and "malformed" both as "absent" — no key, no saved
+choice, nothing to report. A permission error reading that same file is not
+the same thing: the data may genuinely be there and unreadable, which is a
+real failure and must not collapse into the same silent "absent" case.

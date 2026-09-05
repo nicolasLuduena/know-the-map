@@ -232,8 +232,7 @@ const sendExchange = Effect.fn("OpencodeHarnessSession.send")(function* <T, I>(
 });
 
 /**
- * OpenCode adapter for the `Harness` interface. Transplant of
- * `harness-probe/src/opencode2-harness.ts`: an embedded OpenCode host, a
+ * OpenCode adapter for the `Harness` interface: an embedded OpenCode host, a
  * session restricted to the `submit_result` tool plus read-only exploration,
  * and one validated payload per `send`.
  */
