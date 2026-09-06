@@ -154,6 +154,9 @@ const parseLsFilesRecord = (record: string): Option.Option<LsFilesRecord> => {
   return Option.some({ mode, object, stage: stageNumber, path });
 };
 
+/** Commands that take their input as arguments still get a closed stdin. */
+const EMPTY_STDIN = new Uint8Array();
+
 /** Matches a full sha1 (40 hex chars) or sha256 (64 hex chars) git object id. */
 const HEX_OBJECT_ID = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
 
@@ -293,7 +296,7 @@ export const GitLive: Layer.Layer<Git, never, ChildProcessSpawner.ChildProcessSp
       const attemptBinary = Effect.fn("Git.attemptBinary")(function* (
         command: Command,
         cwd: string | undefined,
-        input: Uint8Array,
+        input: Uint8Array = EMPTY_STDIN,
       ): Effect.fn.Return<BinaryCommandResult, GitCommandError> {
         const processArgs = cwd === undefined ? [...command.args] : ["-C", cwd, ...command.args];
         return yield* Effect.scoped(
@@ -348,7 +351,7 @@ export const GitLive: Layer.Layer<Git, never, ChildProcessSpawner.ChildProcessSp
       const runBinary = Effect.fn("Git.runBinary")(function* (
         command: Command,
         cwd: string | undefined,
-        input: Uint8Array,
+        input: Uint8Array = EMPTY_STDIN,
       ): Effect.fn.Return<BinaryCommandResult, GitCommandError> {
         return yield* attemptBinary(command, cwd, input).pipe(
           Effect.filterOrFail(
@@ -469,23 +472,22 @@ export const GitLive: Layer.Layer<Git, never, ChildProcessSpawner.ChildProcessSp
           ),
         );
 
-        // One `cat-file --batch` round trip resolves the revision, and
-        // reports its object id, type and size, and streams its content —
-        // all from a single line of stdin. That is the entire subprocess
-        // budget for this read.
+        // `--batch-check` reports the object id, type and size *without*
+        // emitting the content, so an oversized blob is refused having
+        // cost a few dozen bytes. Reading content first and checking the
+        // size afterwards would spend the memory the limit exists to
+        // bound: `--batch` on a 258 MiB blob writes all 258 MiB before
+        // anything can reject it.
         const rev = `${request.commit}:${request.path}`;
-        const batch = yield* runBinary(
-          git("cat-file", "--batch"),
-          root,
-          new TextEncoder().encode(`${rev}\n`),
-        );
+        const revLine = new TextEncoder().encode(`${rev}\n`);
+        const checked = yield* runBinary(git("cat-file", "--batch-check"), root, revLine);
 
-        const headerEnd = batch.stdout.indexOf(0x0a);
+        const headerEnd = checked.stdout.indexOf(0x0a);
         yield* guard(
           headerEnd !== -1,
           () =>
             new GitCommandError({
-              message: `cat-file --batch produced no output for "${rev}"`,
+              message: `cat-file --batch-check produced no output for "${rev}"`,
               cause: new Error(rev),
             }),
         );
@@ -493,7 +495,7 @@ export const GitLive: Layer.Layer<Git, never, ChildProcessSpawner.ChildProcessSp
         // keyword, a byte count, or the literal "missing"), so decoding
         // just this slice as text is safe regardless of what the object's
         // own content contains.
-        const header = new TextDecoder().decode(batch.stdout.subarray(0, headerEnd));
+        const header = new TextDecoder().decode(checked.stdout.subarray(0, headerEnd));
 
         yield* guard(
           !header.endsWith(" missing"),
@@ -511,10 +513,10 @@ export const GitLive: Layer.Layer<Git, never, ChildProcessSpawner.ChildProcessSp
         const [oid, type, size] = yield* Effect.succeed(header.split(" ")).pipe(
           Effect.filterOrFail(
             (parts): parts is [string, string, string] =>
-              parts.length === 3 && !Number.isNaN(Number.parseInt(parts[2] ?? "", 10)),
+              parts.length === 3 && /^[0-9]+$/.test(parts[2] ?? ""),
             () =>
               new GitCommandError({
-                message: `could not parse cat-file --batch header: ${JSON.stringify(header)}`,
+                message: `could not parse cat-file --batch-check header: ${JSON.stringify(header)}`,
                 cause: new Error(header),
               }),
           ),
@@ -551,7 +553,12 @@ export const GitLive: Layer.Layer<Git, never, ChildProcessSpawner.ChildProcessSp
             }),
         );
 
-        const content = batch.stdout.subarray(headerEnd + 1, headerEnd + 1 + size);
+        // Only now, with the size known to fit, is the content worth
+        // reading. Addressed by object id rather than by revision: `oid`
+        // was just proven equal to the schema-validated `expectedHash`, so
+        // nothing caller-shaped reaches this command line.
+        const blob = yield* runBinary(git("cat-file", "blob", oid), root);
+        const content = blob.stdout.subarray(0, size);
         yield* guard(
           !content.includes(0),
           () =>
