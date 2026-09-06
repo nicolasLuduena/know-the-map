@@ -2,11 +2,17 @@
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { BunRuntime, BunServices } from "@effect/platform-bun";
-import { GitLive } from "@know-the-map/git";
+import { Git, GitLive } from "@know-the-map/git";
 import { guard, Harness, HostFailureError } from "@know-the-map/harness";
 import { OpencodeHarnessLive } from "@know-the-map/harness-opencode";
-import { defaultAnalysisBounds, Hermeneut, HermeneutLive } from "@know-the-map/hermeneut";
-import { Config, Console, Effect, Layer } from "effect";
+import {
+  AnalysisArtifact,
+  defaultAnalysisBounds,
+  Hermeneut,
+  HermeneutLive,
+} from "@know-the-map/hermeneut";
+import { startViewer } from "@know-the-map/viewer";
+import { Config, Console, Effect, Layer, Schema } from "effect";
 import { Argument, Command, Flag, Prompt } from "effect/unstable/cli";
 import { readHarnessPreferences, writeHarnessPreferences } from "./harness-preferences.ts";
 import { promptHarnessSelection } from "./harness-prompt.ts";
@@ -71,31 +77,61 @@ const analyze = Command.make(
         maxClarifications,
       });
       yield* Effect.sync(() => mkdirSync(".ktm", { recursive: true }));
+      const encoded = yield* Schema.encodeEffect(AnalysisArtifact)(artifact).pipe(Effect.orDie);
       yield* Effect.tryPromise(() =>
-        Bun.write(OUTPUT_PATH, `${JSON.stringify(artifact, null, 2)}\n`),
+        Bun.write(OUTPUT_PATH, `${JSON.stringify(encoded, null, 2)}\n`),
       ).pipe(Effect.orDie);
       yield* Console.log(`components: ${artifact.components.length}`);
       yield* Console.log(`relationships: ${artifact.relationships.length}`);
       yield* Console.log(`interpretations: ${artifact.interpretations.length}`);
       yield* Console.log(`wrote ${OUTPUT_PATH} (head ${artifact.headCommit})`);
-    }),
+    }).pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          HermeneutLive.pipe(Layer.provide(GitLive), Layer.provide(OpencodeHarnessLive)),
+          OpencodeHarnessLive,
+        ),
+      ),
+    ),
 ).pipe(Command.withDescription("Analyze a repository, writing .ktm/analysis.json"));
+
+const view = Command.make(
+  "view",
+  {
+    path: Argument.string("path").pipe(
+      Argument.withDescription("Directory inside the analyzed repository"),
+      Argument.withDefault("."),
+    ),
+    artifact: Flag.string("artifact").pipe(
+      Flag.withDescription("Saved analysis artifact to open"),
+      Flag.withDefault(OUTPUT_PATH),
+    ),
+    port: Flag.integer("port").pipe(
+      Flag.withDescription("Loopback port; 0 selects an available port"),
+      Flag.withDefault(0),
+    ),
+  },
+  ({ path, artifact, port }) =>
+    Effect.gen(function* () {
+      const git = yield* Git;
+      return yield* Effect.acquireUseRelease(
+        startViewer({ directory: path, artifactPath: artifact, port, git }).pipe(
+          Effect.mapError((cause) => new HostFailureError({ message: cause.message, cause })),
+        ),
+        (viewer) =>
+          Console.log(`view saved analysis at ${viewer.url}`).pipe(Effect.andThen(Effect.never)),
+        (viewer) => Effect.sync(viewer.stop),
+      );
+    }),
+).pipe(Command.withDescription("Browse a saved analysis in a local web interface"));
 
 const cli = Command.make("ktm").pipe(
   Command.withDescription("Know the Map"),
-  Command.withSubcommands([analyze]),
+  Command.withSubcommands([analyze, view]),
 );
 
 cli.pipe(
   Command.run({ version: VERSION }),
-  Effect.provide(
-    Layer.mergeAll(
-      HermeneutLive.pipe(
-        Layer.provide(Layer.provide(GitLive, BunServices.layer)),
-        Layer.provide(OpencodeHarnessLive),
-      ),
-      OpencodeHarnessLive,
-    ).pipe(Layer.provideMerge(BunServices.layer)),
-  ),
+  Effect.provide(GitLive.pipe(Layer.provideMerge(BunServices.layer))),
   BunRuntime.runMain,
 );

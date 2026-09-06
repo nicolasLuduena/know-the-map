@@ -1,8 +1,8 @@
 import { join } from "node:path";
 import { guard } from "@know-the-map/harness";
-import { Context, Effect, Layer, Option, Stream } from "effect";
+import { Context, Effect, Layer, Option, Schema, Stream } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
-import { DirtyTreeError, GitCommandError, RepoNotFoundError } from "./errors.ts";
+import { DirtyTreeError, GitCommandError, RepoNotFoundError, SnapshotFileError } from "./errors.ts";
 
 export interface Repo {
   readonly root: string;
@@ -13,6 +13,33 @@ export interface InventoryEntry {
   /** Repo-relative path. */
   readonly path: string;
   /** Git blob hash of the file content as found on disk. */
+  readonly hash: string;
+}
+
+const SnapshotRequest = Schema.Struct({
+  commit: Schema.String.check(Schema.isPattern(/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/)).annotate({
+    description: "Exact analyzed commit object id.",
+  }),
+  path: Schema.String.check(
+    Schema.makeFilter((path) =>
+      path.length > 0 &&
+      !path.startsWith("/") &&
+      !path.split("/").some((part) => part === ".." || part === "." || part === "") &&
+      !path.includes("\0")
+        ? undefined
+        : "expected a repository-relative file path",
+    ),
+  ).annotate({ description: "Repo-relative source path." }),
+  expectedHash: Schema.String.check(Schema.isPattern(/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/)).annotate({
+    description: "Blob object id from the analysis inventory.",
+  }),
+  maxBytes: Schema.Int.check(Schema.isGreaterThan(0)).annotate({
+    description: "Maximum source bytes to load.",
+  }),
+});
+
+export interface SnapshotFile {
+  readonly content: string;
   readonly hash: string;
 }
 
@@ -55,10 +82,20 @@ export class Git extends Context.Service<
      * describe the content the model reads while the tree is clean.
      */
     resolve(cwd: string): Effect.Effect<Repo, GitError>;
+    /** Resolve a repository without requiring a clean worktree. */
+    discover(cwd: string): Effect.Effect<Repo, RepoNotFoundError | GitCommandError>;
     /** Every tracked and untracked (non-ignored) file, with content hashes. */
     inventory(root: string): Effect.Effect<ReadonlyArray<InventoryEntry>, GitError>;
     /** 1-based editor-style line count of a repo-relative file. */
     lineCount(root: string, path: string): Effect.Effect<number, GitError>;
+    /** Read a text file from an exact commit, independently of worktree state. */
+    readSnapshotFile(
+      root: string,
+      commit: string,
+      path: string,
+      expectedHash: string,
+      maxBytes: number,
+    ): Effect.Effect<SnapshotFile, GitCommandError | SnapshotFileError>;
   }
 >()("@know-the-map/git/Git") {}
 
@@ -189,7 +226,7 @@ export const GitLive: Layer.Layer<Git, never, ChildProcessSpawner.ChildProcessSp
         );
       });
 
-      const resolve = Effect.fn("Git.resolve")(function* (cwd: string) {
+      const discover = Effect.fn("Git.discover")(function* (cwd: string) {
         // Probes: a non-zero exit means "not a repository"/"no commits yet",
         // not a command failure, so the exit code is read as data.
         const topLevel = yield* attempt(git("rev-parse", "--show-toplevel"), cwd).pipe(
@@ -206,20 +243,24 @@ export const GitLive: Layer.Layer<Git, never, ChildProcessSpawner.ChildProcessSp
             () => new RepoNotFoundError({ message: `repository at "${root}" has no commits yet` }),
           ),
         );
-        const headCommit = head.stdout.trim();
+        return { root, headCommit: head.stdout.trim() } satisfies Repo;
+      });
 
-        const status = yield* run(git("status", "--porcelain", "-z"), root);
+      const resolve = Effect.fn("Git.resolve")(function* (cwd: string) {
+        const repo = yield* discover(cwd);
+
+        const status = yield* run(git("status", "--porcelain", "-z"), repo.root);
         const dirty = zFields(status.stdout);
         yield* guard(
           dirty.length === 0,
           () =>
             new DirtyTreeError({
-              message: `worktree at "${root}" is dirty; commit or stash before analyzing`,
+              message: `worktree at "${repo.root}" is dirty; commit or stash before analyzing`,
               entries: dirty,
             }),
         );
 
-        return { root, headCommit } satisfies Repo;
+        return repo;
       });
 
       const inventory = Effect.fn("Git.inventory")(function* (root: string) {
@@ -271,6 +312,63 @@ export const GitLive: Layer.Layer<Git, never, ChildProcessSpawner.ChildProcessSp
         return count;
       });
 
-      return Git.of({ resolve, inventory, lineCount });
+      const readSnapshotFile = Effect.fn("Git.readSnapshotFile")(function* (
+        root: string,
+        commit: string,
+        path: string,
+        expectedHash: string,
+        maxBytes: number,
+      ) {
+        yield* Schema.decodeUnknownEffect(SnapshotRequest)({
+          commit,
+          path,
+          expectedHash,
+          maxBytes,
+        }).pipe(
+          Effect.mapError(
+            (cause) =>
+              new GitCommandError({ message: `invalid snapshot request: ${cause.message}`, cause }),
+          ),
+        );
+        const object = yield* attempt(git("rev-parse", `${commit}:${path}`), root);
+        if (object.exitCode !== 0) {
+          return yield* new SnapshotFileError({
+            message: `"${path}" does not exist at ${commit.slice(0, 12)}`,
+            reason: "missing",
+          });
+        }
+        const hash = object.stdout.trim();
+        if (hash !== expectedHash) {
+          return yield* new SnapshotFileError({
+            message: `"${path}" no longer matches the analyzed blob`,
+            reason: "hash_mismatch",
+          });
+        }
+        const type = yield* run(git("cat-file", "-t", hash), root);
+        if (type.stdout.trim() !== "blob") {
+          return yield* new SnapshotFileError({
+            message: `"${path}" is not a regular file`,
+            reason: "binary",
+          });
+        }
+        const sizeResult = yield* run(git("cat-file", "-s", hash), root);
+        const size = Number.parseInt(sizeResult.stdout.trim(), 10);
+        if (!Number.isFinite(size) || size > maxBytes) {
+          return yield* new SnapshotFileError({
+            message: `"${path}" is larger than the ${maxBytes} byte display limit`,
+            reason: "too_large",
+          });
+        }
+        const blob = yield* run(git("cat-file", "blob", hash), root);
+        if (blob.stdout.includes("\0")) {
+          return yield* new SnapshotFileError({
+            message: `"${path}" is binary and cannot be displayed`,
+            reason: "binary",
+          });
+        }
+        return { content: blob.stdout, hash } satisfies SnapshotFile;
+      });
+
+      return Git.of({ resolve, discover, inventory, lineCount, readSnapshotFile });
     }),
   );

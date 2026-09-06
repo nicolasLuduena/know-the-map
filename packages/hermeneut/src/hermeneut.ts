@@ -16,6 +16,7 @@ import {
 } from "./prompts.ts";
 import type {
   AnalysisArtifact,
+  AnalysisScope,
   Component,
   FileStatus,
   Interpretation,
@@ -102,6 +103,8 @@ export const HermeneutLive: Layer.Layer<Hermeneut, never, Git | Harness> = Layer
       const components: Array<Component> = [];
       const relationships: Array<Relationship> = [];
       const interpretations: Array<Interpretation> = [];
+      const scopes: Array<AnalysisScope> = [];
+      let nextScopeId = 1;
       const referenced = new Set<string>();
       let calls = 0;
 
@@ -181,11 +184,21 @@ export const HermeneutLive: Layer.Layer<Hermeneut, never, Git | Harness> = Layer
         session: HarnessSession,
         scopePaths: ReadonlyArray<string>,
         depth: number,
+        parentScopeId: number | null,
+        originatingComponentId: number | null,
       ): Effect.fn.Return<void, AnalyzeError> {
         for (const path of scopePaths) {
           referenced.add(path);
         }
         const response = yield* exchange(session, scopePaths);
+        const scopeId = nextScopeId++;
+        scopes.push({
+          id: scopeId,
+          parentScopeId,
+          originatingComponentId,
+          inputPaths: scopePaths,
+          result: response,
+        });
         const recordInterpretations = (list: ReadonlyArray<Interpretation>) => {
           interpretations.push(...list);
           for (const interpretation of list) {
@@ -207,7 +220,7 @@ export const HermeneutLive: Layer.Layer<Hermeneut, never, Git | Harness> = Layer
         relationships.push(...response.relationships);
         recordInterpretations(response.interpretations);
         for (const component of response.components) {
-          yield* visit(session, component.files, depth + 1);
+          yield* visit(session, component.files, depth + 1, scopeId, component.id);
         }
       });
 
@@ -236,15 +249,17 @@ export const HermeneutLive: Layer.Layer<Hermeneut, never, Git | Harness> = Layer
         harness.start({ directory: repo.root, systemPrompt: SYSTEM_PROMPT, ...harnessSelection }),
         (session) =>
           Effect.gen(function* () {
-            yield* visit(session, [...inventory.keys()], 0);
+            yield* visit(session, [...inventory.keys()], 0, null, null);
             const generatedAt = yield* DateTime.now;
             return {
+              version: 1,
               headCommit: repo.headCommit,
               generatedAt,
               components,
               relationships,
               interpretations,
               files: yield* buildFiles(),
+              scopes,
             } satisfies AnalysisArtifact;
           }),
         (session) => session.close(),

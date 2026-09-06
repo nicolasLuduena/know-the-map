@@ -302,7 +302,23 @@ export const FileStatus = Schema.Struct({
 });
 export type FileStatus = Schema.Schema.Type<typeof FileStatus>;
 
-export const AnalysisArtifact = Schema.Struct({
+export const AnalysisScope = Schema.Struct({
+  id: PositiveInt.annotate({ description: "Run-local scope id." }),
+  parentScopeId: Schema.NullOr(PositiveInt).annotate({
+    description: "Parent scope id, or null for the repository root.",
+  }),
+  originatingComponentId: Schema.NullOr(PositiveInt).annotate({
+    description: "Component in the parent division that created this scope, or null at root.",
+  }),
+  inputPaths: Schema.Array(Schema.String).annotate({
+    description: "Repo-relative paths submitted for this scope.",
+  }),
+  result: LlmResponse.annotate({ description: "Validated model response for this scope." }),
+});
+export type AnalysisScope = Schema.Schema.Type<typeof AnalysisScope>;
+
+const AnalysisArtifactBase = Schema.Struct({
+  version: Schema.Literal(1).annotate({ description: "Analysis artifact format version." }),
   headCommit: Schema.String.annotate({
     description: "Git commit hash the analysis was made against.",
   }),
@@ -321,5 +337,129 @@ export const AnalysisArtifact = Schema.Struct({
   files: Schema.Array(FileStatus).annotate({
     description: "Every file the analysis referenced, with the state it was analyzed at.",
   }),
+  scopes: Schema.Array(AnalysisScope).annotate({
+    description: "Exploration scopes in traversal order, preserving their hierarchy and responses.",
+  }),
 });
+export const AnalysisArtifact = AnalysisArtifactBase.check(
+  Schema.makeFilter((artifact: Schema.Schema.Type<typeof AnalysisArtifactBase>) => {
+    const issues: Array<Schema.FilterIssue> = [];
+    const scopes = new Map<number, AnalysisScope>();
+    const inventory = new Set(artifact.files.map((file) => file.path));
+    if (inventory.size !== artifact.files.length)
+      issues.push({ path: ["files"], issue: "file inventory contains duplicate paths" });
+    const childOwners = new Set<string>();
+    for (const [index, scope] of artifact.scopes.entries()) {
+      if (scopes.has(scope.id))
+        issues.push({ path: ["scopes", index, "id"], issue: `duplicate scope id ${scope.id}` });
+      scopes.set(scope.id, scope);
+      for (const path of scope.inputPaths)
+        if (!inventory.has(path))
+          issues.push({
+            path: ["scopes", index, "inputPaths"],
+            issue: `path "${path}" is missing from the file inventory`,
+          });
+      if (scope.result.kind === "division")
+        for (const component of scope.result.components)
+          for (const path of component.files)
+            if (!inventory.has(path))
+              issues.push({
+                path: ["scopes", index, "result", "components"],
+                issue: `path "${path}" is missing from the file inventory`,
+              });
+      for (const interpretation of scope.result.interpretations)
+        for (const anchor of interpretation.anchors)
+          if (!inventory.has(anchor.path))
+            issues.push({
+              path: ["scopes", index, "result", "interpretations"],
+              issue: `anchor path "${anchor.path}" is missing from the file inventory`,
+            });
+    }
+    const roots = artifact.scopes.filter((scope) => scope.parentScopeId === null);
+    if (roots.length !== 1)
+      issues.push({ path: ["scopes"], issue: "artifact must contain exactly one root scope" });
+    for (const [index, scope] of artifact.scopes.entries()) {
+      if (scope.parentScopeId === null) {
+        if (scope.originatingComponentId !== null)
+          issues.push({
+            path: ["scopes", index, "originatingComponentId"],
+            issue: "root scope cannot originate from a component",
+          });
+        continue;
+      }
+      const parent = scopes.get(scope.parentScopeId);
+      const component =
+        parent?.result.kind === "division"
+          ? parent.result.components.find(
+              (candidate) => candidate.id === scope.originatingComponentId,
+            )
+          : undefined;
+      if (component === undefined)
+        issues.push({
+          path: ["scopes", index],
+          issue: "scope references a missing parent component",
+        });
+      else {
+        const owner = `${parent?.id}:${component.id}`;
+        if (childOwners.has(owner))
+          issues.push({
+            path: ["scopes", index],
+            issue: "parent component has multiple child scopes",
+          });
+        childOwners.add(owner);
+        if (component.files.join("\0") !== scope.inputPaths.join("\0"))
+          issues.push({
+            path: ["scopes", index, "inputPaths"],
+            issue: "scope input paths differ from its parent component",
+          });
+      }
+    }
+    const scopedComponents = artifact.scopes.flatMap((scope) =>
+      scope.result.kind === "division" ? scope.result.components : [],
+    );
+    const scopedRelationships = artifact.scopes.flatMap((scope) =>
+      scope.result.kind === "division" ? scope.result.relationships : [],
+    );
+    const scopedInterpretations = artifact.scopes.flatMap((scope) => scope.result.interpretations);
+    for (const scope of artifact.scopes)
+      if (scope.result.kind === "division")
+        for (const component of scope.result.components)
+          if (!childOwners.has(`${scope.id}:${component.id}`))
+            issues.push({
+              path: ["scopes"],
+              issue: `component ${scope.id}:${component.id} has no analyzed child scope`,
+            });
+    const root = roots[0];
+    if (root !== undefined) {
+      const reachable = new Set<number>();
+      const visit = (scope: AnalysisScope): void => {
+        if (reachable.has(scope.id)) return;
+        reachable.add(scope.id);
+        for (const child of artifact.scopes) if (child.parentScopeId === scope.id) visit(child);
+      };
+      visit(root);
+      if (reachable.size !== artifact.scopes.length)
+        issues.push({
+          path: ["scopes"],
+          issue: "scope hierarchy contains a cycle or unreachable scope",
+        });
+    }
+    if (JSON.stringify(scopedComponents) !== JSON.stringify(artifact.components))
+      issues.push({
+        path: ["components"],
+        issue: "flattened components do not match scope responses",
+      });
+    if (JSON.stringify(scopedRelationships) !== JSON.stringify(artifact.relationships))
+      issues.push({
+        path: ["relationships"],
+        issue: "flattened relationships do not match scope responses",
+      });
+    if (JSON.stringify(scopedInterpretations) !== JSON.stringify(artifact.interpretations))
+      issues.push({
+        path: ["interpretations"],
+        issue: "flattened interpretations do not match scope responses",
+      });
+    return issues;
+  }),
+);
 export type AnalysisArtifact = Schema.Schema.Type<typeof AnalysisArtifact>;

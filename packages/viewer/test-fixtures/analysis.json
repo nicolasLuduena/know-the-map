@@ -1,0 +1,135 @@
+{
+  "version": 1,
+  "headCommit": "9c4a2c3a6631d18afc6419f24a0166c226d6c4aa",
+  "generatedAt": "2026-09-05T12:00:00.000Z",
+  "components": [
+    {
+      "id": 1,
+      "name": "Product foundation",
+      "summary": "Defines the product promise, users, and public project entry point.",
+      "files": ["PRODUCT.md", "README.md"]
+    },
+    {
+      "id": 2,
+      "name": "Interface direction",
+      "summary": "Explores the review workspace and its synchronized semantic lenses.",
+      "files": ["docs/design/UI_OPTIONS.md"]
+    }
+  ],
+  "relationships": [
+    {
+      "id": 3,
+      "from": "Interface direction",
+      "to": "Product foundation",
+      "kind": "uses",
+      "description": "The interface options turn the product principles into concrete review flows."
+    }
+  ],
+  "interpretations": [
+    {
+      "id": 4,
+      "kind": "role",
+      "text": "The product model anchors exact code evidence in a persistent understanding of the repository.",
+      "anchors": [{ "path": "PRODUCT.md", "lineStart": 15, "lineEnd": 25 }]
+    },
+    {
+      "id": 1,
+      "kind": "role",
+      "text": "The product definition establishes the reviewer and the decisions the workspace must support.",
+      "anchors": [{ "path": "PRODUCT.md", "lineStart": 5, "lineEnd": 18 }]
+    },
+    {
+      "id": 1,
+      "kind": "role",
+      "text": "The design document compares three views and recommends a shared workspace around evidence.",
+      "anchors": [{ "path": "docs/design/UI_OPTIONS.md", "lineStart": 300, "lineEnd": 323 }]
+    }
+  ],
+  "files": [
+    { "path": "PRODUCT.md", "hash": "b2c4ee8ebe61174fff40ad7afa621c06f4d071df", "lineCount": 72 },
+    { "path": "README.md", "hash": "6f8c24798642a807c9491e43daf7a5cf96d57636", "lineCount": 12 },
+    {
+      "path": "docs/design/UI_OPTIONS.md",
+      "hash": "d5f4b68df8538100cf1524869e7e9d0054cd70c6",
+      "lineCount": 469
+    }
+  ],
+  "scopes": [
+    {
+      "id": 1,
+      "parentScopeId": null,
+      "originatingComponentId": null,
+      "inputPaths": ["PRODUCT.md", "README.md", "docs/design/UI_OPTIONS.md"],
+      "result": {
+        "kind": "division",
+        "components": [
+          {
+            "id": 1,
+            "name": "Product foundation",
+            "summary": "Defines the product promise, users, and public project entry point.",
+            "files": ["PRODUCT.md", "README.md"]
+          },
+          {
+            "id": 2,
+            "name": "Interface direction",
+            "summary": "Explores the review workspace and its synchronized semantic lenses.",
+            "files": ["docs/design/UI_OPTIONS.md"]
+          }
+        ],
+        "relationships": [
+          {
+            "id": 3,
+            "from": "Interface direction",
+            "to": "Product foundation",
+            "kind": "uses",
+            "description": "The interface options turn the product principles into concrete review flows."
+          }
+        ],
+        "interpretations": [
+          {
+            "id": 4,
+            "kind": "role",
+            "text": "The product model anchors exact code evidence in a persistent understanding of the repository.",
+            "anchors": [{ "path": "PRODUCT.md", "lineStart": 15, "lineEnd": 25 }]
+          }
+        ]
+      }
+    },
+    {
+      "id": 2,
+      "parentScopeId": 1,
+      "originatingComponentId": 1,
+      "inputPaths": ["PRODUCT.md", "README.md"],
+      "result": {
+        "kind": "module",
+        "summary": "Product definition and repository introduction.",
+        "interpretations": [
+          {
+            "id": 1,
+            "kind": "role",
+            "text": "The product definition establishes the reviewer and the decisions the workspace must support.",
+            "anchors": [{ "path": "PRODUCT.md", "lineStart": 5, "lineEnd": 18 }]
+          }
+        ]
+      }
+    },
+    {
+      "id": 3,
+      "parentScopeId": 1,
+      "originatingComponentId": 2,
+      "inputPaths": ["docs/design/UI_OPTIONS.md"],
+      "result": {
+        "kind": "module",
+        "summary": "Candidate interaction models for repository and change review.",
+        "interpretations": [
+          {
+            "id": 1,
+            "kind": "role",
+            "text": "The design document compares three views and recommends a shared workspace around evidence.",
+            "anchors": [{ "path": "docs/design/UI_OPTIONS.md", "lineStart": 300, "lineEnd": 323 }]
+          }
+        ]
+      }
+    }
+  ]
+}

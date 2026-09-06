@@ -4,6 +4,7 @@ export { AnalysisBounds, defaultAnalysisBounds, Hermeneut, HermeneutLive } from 
 export { clarificationPrompt, SYSTEM_PROMPT, scopePrompt } from "./prompts.ts";
 export {
   AnalysisArtifact,
+  AnalysisScope,
   Anchor,
   Component,
   DivisionResult,

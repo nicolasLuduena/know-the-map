@@ -5,6 +5,19 @@
 >
 > Product context: [`PRODUCT.md`](../../PRODUCT.md)
 
+## First implemented slice: saved-analysis browser
+
+The initial interface is a local React workspace launched by `ktm view`. It has
+an expandable component outline, scope details, and an on-demand source pane.
+Search matches component names and paths while retaining ancestors. Connections
+navigate within the division that declared them; interpretations remain associated
+with their original scope. Code is pinned to the saved commit, not the working tree.
+
+The existing mockups below remain explorations for later PR review. This slice
+has no Story/Map/Code mode switch, no permanent inspector, and no change-analysis
+or review-decision controls. It first tests whether the actual analysis structure
+is understandable and its source evidence inspectable.
+
 ## Product framing
 
 Know the Map should be a standalone local web application served by the CLI.

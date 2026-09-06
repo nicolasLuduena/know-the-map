@@ -37,6 +37,7 @@ const MockGit: Layer.Layer<Git> = Layer.succeed(
   Git,
   Git.of({
     resolve: () => Effect.succeed({ root: "/repo", headCommit: FIXTURE.headCommit }),
+    discover: () => Effect.succeed({ root: "/repo", headCommit: FIXTURE.headCommit }),
     inventory: (): Effect.Effect<ReadonlyArray<InventoryEntry>, GitError> =>
       Effect.succeed(FIXTURE.files.map(({ path, hash }) => ({ path, hash }))),
     lineCount: (_root, path) => {
@@ -50,6 +51,7 @@ const MockGit: Layer.Layer<Git> = Layer.succeed(
           )
         : Effect.succeed(file.lineCount);
     },
+    readSnapshotFile: () => Effect.die(new Error("unused in hermeneut tests")),
   }),
 );
 
@@ -368,4 +370,33 @@ test("divisions nested beyond the max depth fail loudly", async () => {
   if (outcome._tag !== "Left") return;
   expect(outcome.left).toBeInstanceOf(AnalysisBoundExceededError);
   expect(outcome.left.message).toContain("max depth");
+});
+
+test("analysis retains response provenance and repeated local ids without extra calls", async () => {
+  const { outcome, sent } = await runAnalysis([
+    division(),
+    division({
+      components: [{ id: 1, name: "alpha", summary: "Nested alpha", files: ["src/a.ts"] }],
+      relationships: [],
+      interpretations: [],
+    }),
+    module(1, "src/a.ts"),
+    module(1, "src/b.ts"),
+  ]);
+  expect(outcome._tag).toBe("Right");
+  if (outcome._tag !== "Right") throw new Error("analysis failed");
+  expect(sent).toHaveLength(4);
+  expect(
+    outcome.right.scopes.map(({ id, parentScopeId, originatingComponentId }) => ({
+      id,
+      parentScopeId,
+      originatingComponentId,
+    })),
+  ).toEqual([
+    { id: 1, parentScopeId: null, originatingComponentId: null },
+    { id: 2, parentScopeId: 1, originatingComponentId: 1 },
+    { id: 3, parentScopeId: 2, originatingComponentId: 1 },
+    { id: 4, parentScopeId: 1, originatingComponentId: 2 },
+  ]);
+  expect(outcome.right.scopes[2]?.result.kind).toBe("module");
 });
