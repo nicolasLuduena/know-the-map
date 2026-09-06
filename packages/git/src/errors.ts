@@ -14,3 +14,11 @@ export class GitCommandError extends Schema.TaggedError<GitCommandError>()("GitC
   message: Schema.String,
   cause: Schema.Defect(),
 }) {}
+
+export class SnapshotFileError extends Schema.TaggedError<SnapshotFileError>()(
+  "SnapshotFileError",
+  {
+    message: Schema.String,
+    reason: Schema.Literals(["missing", "hash_mismatch", "not_a_file", "too_large", "binary"]),
+  },
+) {}

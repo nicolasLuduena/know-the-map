@@ -36,6 +36,11 @@ const FIXTURE = {
 const MockGit: Layer.Layer<Git> = Layer.succeed(
   Git,
   Git.of({
+    // Hermeneut's analysis path never reads a snapshot at an exact commit;
+    // that's the viewer's job. `discover` mirrors `resolve` since this
+    // fixture has no notion of a dirty worktree, and `readSnapshotFile`
+    // fails loudly if a future caller ever reaches it unexpectedly.
+    discover: () => Effect.succeed({ root: "/repo", headCommit: FIXTURE.headCommit }),
     resolve: () => Effect.succeed({ root: "/repo", headCommit: FIXTURE.headCommit }),
     inventory: (): Effect.Effect<ReadonlyArray<InventoryEntry>, GitError> =>
       Effect.succeed(FIXTURE.files.map(({ path, hash }) => ({ path, hash }))),
@@ -50,6 +55,13 @@ const MockGit: Layer.Layer<Git> = Layer.succeed(
           )
         : Effect.succeed(file.lineCount);
     },
+    readSnapshotFile: (_root, _commit, path) =>
+      Effect.fail(
+        new GitCommandError({
+          message: `MockGit.readSnapshotFile is not implemented; unexpectedly asked for "${path}"`,
+          cause: new Error(path),
+        }),
+      ),
   }),
 );
 

@@ -1,8 +1,8 @@
 import { join } from "node:path";
 import { guard } from "@know-the-map/harness";
-import { Context, Effect, Layer, Option, Stream } from "effect";
+import { Context, Effect, Layer, Option, Schema, Stream } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
-import { DirtyTreeError, GitCommandError, RepoNotFoundError } from "./errors.ts";
+import { DirtyTreeError, GitCommandError, RepoNotFoundError, SnapshotFileError } from "./errors.ts";
 
 export interface Repo {
   readonly root: string;
@@ -16,6 +16,13 @@ export interface InventoryEntry {
   readonly hash: string;
 }
 
+export interface SnapshotFile {
+  /** Text content of the blob, decoded as UTF-8. */
+  readonly content: string;
+  /** Git blob hash of the content read, i.e. the confirmed `expectedHash`. */
+  readonly hash: string;
+}
+
 /** A program and its arguments, kept together so runs and error text share one value. */
 interface Command {
   readonly file: string;
@@ -25,6 +32,18 @@ interface Command {
 /** Raw result of a finished command: a non-zero exit code is data, not failure. */
 interface CommandResult {
   readonly stdout: string;
+  readonly stderr: string;
+  readonly exitCode: number;
+}
+
+/**
+ * Raw result of a finished command whose stdout is arbitrary bytes rather
+ * than text: `git cat-file --batch` echoes a blob's content verbatim, and
+ * `Stream.decodeText()` could throw on (or silently mangle) bytes that
+ * aren't valid UTF-8 before we ever get to inspect them.
+ */
+interface BinaryCommandResult {
+  readonly stdout: Uint8Array;
   readonly stderr: string;
   readonly exitCode: number;
 }
@@ -50,6 +69,14 @@ export class Git extends Context.Service<
   Git,
   {
     /**
+     * Resolve the repository containing `cwd` and its HEAD commit, without
+     * checking whether the worktree is clean. Use this where committed
+     * history is read regardless of local edits (e.g. a viewer showing a
+     * past commit); `resolve` builds on this and adds the clean-tree guard
+     * that analysis relies on.
+     */
+    discover(cwd: string): Effect.Effect<Repo, RepoNotFoundError | GitCommandError>;
+    /**
      * Resolve the repository containing `cwd`. Fails on a dirty worktree:
      * the artifact pins HEAD plus per-file blob hashes, and those only
      * describe the content the model reads while the tree is clean.
@@ -59,6 +86,19 @@ export class Git extends Context.Service<
     inventory(root: string): Effect.Effect<ReadonlyArray<InventoryEntry>, GitError>;
     /** 1-based editor-style line count of a repo-relative file. */
     lineCount(root: string, path: string): Effect.Effect<number, GitError>;
+    /**
+     * Read a file's content at an exact commit, independent of worktree
+     * state: a dirty tree, a later commit, or the file's later deletion
+     * none of them change what this returns. `expectedHash` guards against
+     * reading the wrong content when a caller's view of the repo is stale.
+     */
+    readSnapshotFile(
+      root: string,
+      commit: string,
+      path: string,
+      expectedHash: string,
+      maxBytes: number,
+    ): Effect.Effect<SnapshotFile, GitCommandError | SnapshotFileError>;
   }
 >()("@know-the-map/git/Git") {}
 
@@ -113,6 +153,61 @@ const parseLsFilesRecord = (record: string): Option.Option<LsFilesRecord> => {
   }
   return Option.some({ mode, object, stage: stageNumber, path });
 };
+
+/** Matches a full sha1 (40 hex chars) or sha256 (64 hex chars) git object id. */
+const HEX_OBJECT_ID = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
+
+const HexObjectId = Schema.String.pipe(
+  Schema.check(
+    Schema.isPattern(HEX_OBJECT_ID, {
+      description: "a full 40-character sha1 or 64-character sha256 hex object id",
+    }),
+  ),
+);
+
+const RepoRelativePath = Schema.String.pipe(
+  Schema.check(
+    Schema.makeFilter((path: string) => {
+      if (path.length === 0) {
+        return "path must not be empty";
+      }
+      if (path.includes("\0")) {
+        return "path must not contain a NUL byte";
+      }
+      if (path.startsWith("/")) {
+        return "path must be repo-relative, not absolute";
+      }
+      const badSegment = path
+        .split("/")
+        .find((segment) => segment === "" || segment === "." || segment === "..");
+      return badSegment === undefined ? undefined : `path segment "${badSegment}" is not allowed`;
+    }),
+  ),
+);
+
+/**
+ * Validated input to `readSnapshotFile`. Both `path` and `commit` cross into
+ * git subprocess arguments and stdin, so their invariants live here rather
+ * than in the function body: a schema failure never lets an attacker-shaped
+ * value (`../outside`, a flag like `--help`) reach a subprocess at all.
+ */
+const SnapshotRequest = Schema.Struct({
+  commit: HexObjectId.annotate({
+    description: "Commit (or other revision) to read the file from, as a full hex object id.",
+  }),
+  path: RepoRelativePath.annotate({
+    description: "Repo-relative path of the file to read.",
+  }),
+  expectedHash: HexObjectId.annotate({
+    description:
+      "Blob hash the caller expects at commit:path; a mismatch fails loudly instead of returning unexpected content.",
+  }),
+  maxBytes: Schema.Int.pipe(Schema.check(Schema.isGreaterThan(0))).annotate({
+    description:
+      "Maximum content size in bytes; a larger blob fails as too_large rather than being read into memory.",
+  }),
+});
+type SnapshotRequest = Schema.Schema.Type<typeof SnapshotRequest>;
 
 export const GitLive: Layer.Layer<Git, never, ChildProcessSpawner.ChildProcessSpawner> =
   Layer.effect(
@@ -189,7 +284,85 @@ export const GitLive: Layer.Layer<Git, never, ChildProcessSpawner.ChildProcessSp
         );
       });
 
-      const resolve = Effect.fn("Git.resolve")(function* (cwd: string) {
+      /**
+       * Like `attempt`, but for commands whose stdout must be read as raw
+       * bytes and whose input is fed on stdin rather than argv — used by
+       * `readSnapshotFile` to feed `git cat-file --batch` a revision
+       * expression without ever placing it on a command line.
+       */
+      const attemptBinary = Effect.fn("Git.attemptBinary")(function* (
+        command: Command,
+        cwd: string | undefined,
+        input: Uint8Array,
+      ): Effect.fn.Return<BinaryCommandResult, GitCommandError> {
+        const processArgs = cwd === undefined ? [...command.args] : ["-C", cwd, ...command.args];
+        return yield* Effect.scoped(
+          Effect.gen(function* () {
+            const handle = yield* spawner
+              .spawn(ChildProcess.make(command.file, processArgs, { stdin: Stream.succeed(input) }))
+              .pipe(
+                Effect.mapError(
+                  (cause) =>
+                    new GitCommandError({
+                      message: `${describe(command)} failed to spawn`,
+                      cause,
+                    }),
+                ),
+              );
+            // Collect stdout as raw bytes and only decode the small ASCII
+            // header ourselves once we've located it (see readSnapshotFile):
+            // the size/binary checks below must see the exact bytes git
+            // wrote, not a lossy text decoding of them.
+            const [stdoutChunks, stderr] = yield* Effect.zip(
+              Stream.runCollect(handle.stdout),
+              handle.stderr.pipe(Stream.decodeText(), Stream.mkString),
+              { concurrent: true },
+            ).pipe(
+              Effect.mapError(
+                (cause) =>
+                  new GitCommandError({
+                    message: `${describe(command)} output could not be read`,
+                    cause,
+                  }),
+              ),
+            );
+            const exitCode = yield* handle.exitCode.pipe(
+              Effect.mapError(
+                (cause) =>
+                  new GitCommandError({
+                    message: `${describe(command)} exit code could not be read`,
+                    cause,
+                  }),
+              ),
+            );
+            return {
+              stdout: Buffer.concat(stdoutChunks),
+              stderr,
+              exitCode: ChildProcessSpawner.ExitCode(exitCode),
+            };
+          }),
+        );
+      });
+
+      /** Run where any non-zero exit is a failure; yields the successful result. */
+      const runBinary = Effect.fn("Git.runBinary")(function* (
+        command: Command,
+        cwd: string | undefined,
+        input: Uint8Array,
+      ): Effect.fn.Return<BinaryCommandResult, GitCommandError> {
+        return yield* attemptBinary(command, cwd, input).pipe(
+          Effect.filterOrFail(
+            (result) => result.exitCode === 0,
+            (result) =>
+              new GitCommandError({
+                message: `${describe(command)} exited with code ${result.exitCode}: ${result.stderr.trim()}`,
+                cause: new Error(result.stderr.trim()),
+              }),
+          ),
+        );
+      });
+
+      const discover = Effect.fn("Git.discover")(function* (cwd: string) {
         // Probes: a non-zero exit means "not a repository"/"no commits yet",
         // not a command failure, so the exit code is read as data.
         const topLevel = yield* attempt(git("rev-parse", "--show-toplevel"), cwd).pipe(
@@ -208,18 +381,24 @@ export const GitLive: Layer.Layer<Git, never, ChildProcessSpawner.ChildProcessSp
         );
         const headCommit = head.stdout.trim();
 
-        const status = yield* run(git("status", "--porcelain", "-z"), root);
+        return { root, headCommit } satisfies Repo;
+      });
+
+      const resolve = Effect.fn("Git.resolve")(function* (cwd: string) {
+        const repo = yield* discover(cwd);
+
+        const status = yield* run(git("status", "--porcelain", "-z"), repo.root);
         const dirty = zFields(status.stdout);
         yield* guard(
           dirty.length === 0,
           () =>
             new DirtyTreeError({
-              message: `worktree at "${root}" is dirty; commit or stash before analyzing`,
+              message: `worktree at "${repo.root}" is dirty; commit or stash before analyzing`,
               entries: dirty,
             }),
         );
 
-        return { root, headCommit } satisfies Repo;
+        return repo;
       });
 
       const inventory = Effect.fn("Git.inventory")(function* (root: string) {
@@ -271,6 +450,120 @@ export const GitLive: Layer.Layer<Git, never, ChildProcessSpawner.ChildProcessSp
         return count;
       });
 
-      return Git.of({ resolve, inventory, lineCount });
+      const readSnapshotFile = Effect.fn("Git.readSnapshotFile")(function* (
+        root: string,
+        commit: string,
+        path: string,
+        expectedHash: string,
+        maxBytes: number,
+      ): Effect.fn.Return<SnapshotFile, GitCommandError | SnapshotFileError> {
+        const request: SnapshotRequest = yield* Schema.decodeUnknownEffect(SnapshotRequest)({
+          commit,
+          path,
+          expectedHash,
+          maxBytes,
+        }).pipe(
+          Effect.mapError(
+            (cause) =>
+              new GitCommandError({ message: `invalid snapshot request: ${cause.message}`, cause }),
+          ),
+        );
+
+        // One `cat-file --batch` round trip resolves the revision, and
+        // reports its object id, type and size, and streams its content —
+        // all from a single line of stdin. That is the entire subprocess
+        // budget for this read.
+        const rev = `${request.commit}:${request.path}`;
+        const batch = yield* runBinary(
+          git("cat-file", "--batch"),
+          root,
+          new TextEncoder().encode(`${rev}\n`),
+        );
+
+        const headerEnd = batch.stdout.indexOf(0x0a);
+        yield* guard(
+          headerEnd !== -1,
+          () =>
+            new GitCommandError({
+              message: `cat-file --batch produced no output for "${rev}"`,
+              cause: new Error(rev),
+            }),
+        );
+        // The header line is always plain ASCII (an object id, a type
+        // keyword, a byte count, or the literal "missing"), so decoding
+        // just this slice as text is safe regardless of what the object's
+        // own content contains.
+        const header = new TextDecoder().decode(batch.stdout.subarray(0, headerEnd));
+
+        yield* guard(
+          !header.endsWith(" missing"),
+          () =>
+            new SnapshotFileError({
+              message: `"${request.path}" does not exist at ${request.commit}`,
+              reason: "missing",
+            }),
+        );
+
+        // A well-formed header narrows to exactly [oid, type, size]; the
+        // refinement (rather than a `guard` on individually-optional
+        // destructured fields) is what lets TypeScript treat `oid` and
+        // `type` as `string` from here on, not `string | undefined`.
+        const [oid, type, size] = yield* Effect.succeed(header.split(" ")).pipe(
+          Effect.filterOrFail(
+            (parts): parts is [string, string, string] =>
+              parts.length === 3 && !Number.isNaN(Number.parseInt(parts[2] ?? "", 10)),
+            () =>
+              new GitCommandError({
+                message: `could not parse cat-file --batch header: ${JSON.stringify(header)}`,
+                cause: new Error(header),
+              }),
+          ),
+          Effect.map(
+            ([parsedOid, parsedType, sizeText]) =>
+              [parsedOid, parsedType, Number.parseInt(sizeText, 10)] as const,
+          ),
+        );
+
+        yield* guard(
+          oid === request.expectedHash,
+          () =>
+            new SnapshotFileError({
+              message: `"${request.path}" at ${request.commit} is ${oid}, expected ${request.expectedHash}`,
+              reason: "hash_mismatch",
+            }),
+        );
+
+        yield* guard(
+          type === "blob",
+          () =>
+            new SnapshotFileError({
+              message: `"${request.path}" at ${request.commit} is a ${type}, not a file`,
+              reason: "not_a_file",
+            }),
+        );
+
+        yield* guard(
+          size <= request.maxBytes,
+          () =>
+            new SnapshotFileError({
+              message: `"${request.path}" is ${size} bytes, over the ${request.maxBytes}-byte limit`,
+              reason: "too_large",
+            }),
+        );
+
+        const content = batch.stdout.subarray(headerEnd + 1, headerEnd + 1 + size);
+        yield* guard(
+          !content.includes(0),
+          () =>
+            new SnapshotFileError({
+              message: `"${request.path}" at ${request.commit} contains a NUL byte and is not text`,
+              reason: "binary",
+            }),
+        );
+
+        return { content: new TextDecoder().decode(content), hash: oid } satisfies SnapshotFile;
+      });
+
+      return Git.of({ discover, resolve, inventory, lineCount, readSnapshotFile });
     }),
   );
