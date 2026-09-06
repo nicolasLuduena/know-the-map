@@ -14,13 +14,7 @@ import {
   SYSTEM_PROMPT,
   scopePrompt,
 } from "./prompts.ts";
-import type {
-  AnalysisArtifact,
-  Component,
-  FileStatus,
-  Interpretation,
-  Relationship,
-} from "./schemas.ts";
+import type { AnalysisArtifact, AnalysisScope, FileStatus } from "./schemas.ts";
 import { LlmResponse, PositiveInt } from "./schemas.ts";
 import { validateResponse } from "./validation.ts";
 
@@ -99,10 +93,9 @@ export const HermeneutLive: Layer.Layer<Hermeneut, never, Git | Harness> = Layer
           return count;
         });
 
-      const components: Array<Component> = [];
-      const relationships: Array<Relationship> = [];
-      const interpretations: Array<Interpretation> = [];
+      const scopes: Array<AnalysisScope> = [];
       const referenced = new Set<string>();
+      let nextScopeId = 1;
       let calls = 0;
 
       const exchange = Effect.fn("Hermeneut.exchange")(function* (
@@ -181,21 +174,29 @@ export const HermeneutLive: Layer.Layer<Hermeneut, never, Git | Harness> = Layer
         session: HarnessSession,
         scopePaths: ReadonlyArray<string>,
         depth: number,
+        parentScopeId: number | null,
+        originatingComponentId: number | null,
       ): Effect.fn.Return<void, AnalyzeError> {
         for (const path of scopePaths) {
           referenced.add(path);
         }
         const response = yield* exchange(session, scopePaths);
-        const recordInterpretations = (list: ReadonlyArray<Interpretation>) => {
-          interpretations.push(...list);
-          for (const interpretation of list) {
-            for (const anchor of interpretation.anchors) {
-              referenced.add(anchor.path);
-            }
+        const scopeId = nextScopeId++;
+        // Pushed before recursing, so `scopes` ends up in pre-order: a
+        // parent always precedes the children it opened.
+        scopes.push({
+          id: scopeId,
+          parentScopeId,
+          originatingComponentId,
+          inputPaths: scopePaths,
+          result: response,
+        });
+        for (const interpretation of response.interpretations) {
+          for (const anchor of interpretation.anchors) {
+            referenced.add(anchor.path);
           }
-        };
+        }
         if (response.kind === "module") {
-          recordInterpretations(response.interpretations);
           return;
         }
         if (depth >= bounds.maxDepth) {
@@ -203,11 +204,8 @@ export const HermeneutLive: Layer.Layer<Hermeneut, never, Git | Harness> = Layer
             message: `division at depth ${depth} would exceed the max depth of ${bounds.maxDepth}`,
           });
         }
-        components.push(...response.components);
-        relationships.push(...response.relationships);
-        recordInterpretations(response.interpretations);
         for (const component of response.components) {
-          yield* visit(session, component.files, depth + 1);
+          yield* visit(session, component.files, depth + 1, scopeId, component.id);
         }
       });
 
@@ -236,15 +234,14 @@ export const HermeneutLive: Layer.Layer<Hermeneut, never, Git | Harness> = Layer
         harness.start({ directory: repo.root, systemPrompt: SYSTEM_PROMPT, ...harnessSelection }),
         (session) =>
           Effect.gen(function* () {
-            yield* visit(session, [...inventory.keys()], 0);
+            yield* visit(session, [...inventory.keys()], 0, null, null);
             const generatedAt = yield* DateTime.now;
             return {
+              version: 1,
               headCommit: repo.headCommit,
               generatedAt,
-              components,
-              relationships,
-              interpretations,
               files: yield* buildFiles(),
+              scopes,
             } satisfies AnalysisArtifact;
           }),
         (session) => session.close(),

@@ -5,8 +5,13 @@ import { BunRuntime, BunServices } from "@effect/platform-bun";
 import { GitLive } from "@know-the-map/git";
 import { guard, Harness, HostFailureError } from "@know-the-map/harness";
 import { OpencodeHarnessLive } from "@know-the-map/harness-opencode";
-import { defaultAnalysisBounds, Hermeneut, HermeneutLive } from "@know-the-map/hermeneut";
-import { Config, Console, Effect, Layer } from "effect";
+import {
+  AnalysisArtifact,
+  defaultAnalysisBounds,
+  Hermeneut,
+  HermeneutLive,
+} from "@know-the-map/hermeneut";
+import { Config, Console, Effect, Layer, Schema } from "effect";
 import { Argument, Command, Flag, Prompt } from "effect/unstable/cli";
 import { readHarnessPreferences, writeHarnessPreferences } from "./harness-preferences.ts";
 import { promptHarnessSelection } from "./harness-prompt.ts";
@@ -71,12 +76,25 @@ const analyze = Command.make(
         maxClarifications,
       });
       yield* Effect.sync(() => mkdirSync(".ktm", { recursive: true }));
+      // Encoded through the schema rather than stringified directly, so the
+      // file on disk is exactly what `AnalysisArtifact` decodes back.
+      const encoded = yield* Schema.encodeEffect(AnalysisArtifact)(artifact).pipe(Effect.orDie);
       yield* Effect.tryPromise(() =>
-        Bun.write(OUTPUT_PATH, `${JSON.stringify(artifact, null, 2)}\n`),
+        Bun.write(OUTPUT_PATH, `${JSON.stringify(encoded, null, 2)}\n`),
       ).pipe(Effect.orDie);
-      yield* Console.log(`components: ${artifact.components.length}`);
-      yield* Console.log(`relationships: ${artifact.relationships.length}`);
-      yield* Console.log(`interpretations: ${artifact.interpretations.length}`);
+      const divisions = artifact.scopes.flatMap((scope) =>
+        scope.result.kind === "division" ? [scope.result] : [],
+      );
+      yield* Console.log(`scopes: ${artifact.scopes.length}`);
+      yield* Console.log(
+        `components: ${divisions.reduce((total, it) => total + it.components.length, 0)}`,
+      );
+      yield* Console.log(
+        `relationships: ${divisions.reduce((total, it) => total + it.relationships.length, 0)}`,
+      );
+      yield* Console.log(
+        `interpretations: ${artifact.scopes.reduce((total, it) => total + it.result.interpretations.length, 0)}`,
+      );
       yield* Console.log(`wrote ${OUTPUT_PATH} (head ${artifact.headCommit})`);
     }),
 ).pipe(Command.withDescription("Analyze a repository, writing .ktm/analysis.json"));
