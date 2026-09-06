@@ -221,7 +221,7 @@ export const startViewer = Effect.fn("startViewer")(function* (options: ViewerOp
             }),
         ),
       );
-    return { path, content: read.content, hash: read.hash } satisfies SourceFile;
+    return { path, content: read.content } satisfies SourceFile;
   });
 
   const client = yield* Effect.tryPromise({

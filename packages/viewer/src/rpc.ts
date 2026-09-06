@@ -46,19 +46,13 @@ export const ReadSourcePayload = Schema.Struct({
 });
 export type ReadSourcePayload = Schema.Schema.Type<typeof ReadSourcePayload>;
 
-/**
- * A file's content as it was at the analyzed commit, plus what the pane
- * needs to confirm it is showing what it thinks it is showing.
- */
+/** A file's content as it was at the analyzed commit. */
 export const SourceFile = Schema.Struct({
   path: Schema.String.annotate({
     description: "Repo-relative path of the file that was read.",
   }),
   content: Schema.String.annotate({
     description: "Full text content of the file at the analyzed commit.",
-  }),
-  hash: Schema.String.annotate({
-    description: "Git blob hash of the content returned, matching the artifact's file inventory.",
   }),
 });
 export type SourceFile = Schema.Schema.Type<typeof SourceFile>;

@@ -146,7 +146,6 @@ test("reads a cited file's committed content, even with a dirty worktree", async
   // seeing the committed content proves the read is pinned to headCommit,
   // not to whatever is on disk right now.
   expect(outcome.success.content).toBe("one\n");
-  expect(outcome.success.hash).toBe(aHash);
 });
 
 test("refuses a path that is not part of the analyzed file inventory", async () => {
