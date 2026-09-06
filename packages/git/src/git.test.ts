@@ -382,10 +382,16 @@ test("readSnapshotFile fails with not_a_file when the path is a directory", asyn
   }
 });
 
-test("readSnapshotFile fails with too_large when the blob exceeds maxBytes", async () => {
+test("readSnapshotFile rejects an oversized blob without reading its content", async () => {
   const { dir, cleanup } = makeRepo();
   try {
-    writeFileSync(join(dir, "big.txt"), "x".repeat(100));
+    // The size here is load-bearing, not arbitrary: `maxBytes` exists to
+    // bound how much this can pull into memory, so the blob has to be far
+    // larger than the limit for the test to mean anything. Reading content
+    // first and checking the size afterwards passes a 100-byte fixture and
+    // still allocates every byte of a real one.
+    const oversized = 8 * 1024 * 1024;
+    writeFileSync(join(dir, "big.txt"), "x".repeat(oversized));
     git(["add", "big.txt"], dir);
     git(["-c", "user.email=test@test", "-c", "user.name=test", "commit", "-m", "big"], dir);
     const commit = git(["rev-parse", "HEAD"], dir).stdout.trim();
@@ -400,6 +406,9 @@ test("readSnapshotFile fails with too_large when the blob exceeds maxBytes", asy
     const error = outcome && "error" in outcome ? outcome.error : undefined;
     expect(error).toBeInstanceOf(SnapshotFileError);
     expect(error instanceof SnapshotFileError ? error.reason : undefined).toBe("too_large");
+    // The reported size comes from the header, proving the limit was
+    // applied against git's own accounting rather than a buffer length.
+    expect(error instanceof SnapshotFileError ? error.message : "").toContain(`${oversized}`);
   } finally {
     cleanup();
   }
