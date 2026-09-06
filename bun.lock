@@ -24,6 +24,7 @@
         "@know-the-map/harness": "workspace:*",
         "@know-the-map/harness-opencode": "workspace:*",
         "@know-the-map/hermeneut": "workspace:*",
+        "@know-the-map/viewer": "workspace:*",
         "effect": "catalog:",
       },
     },
@@ -77,6 +78,9 @@
       "name": "@know-the-map/viewer",
       "version": "0.0.0",
       "dependencies": {
+        "@effect/platform-bun": "catalog:",
+        "@know-the-map/git": "workspace:*",
+        "@know-the-map/harness": "workspace:*",
         "@know-the-map/hermeneut": "workspace:*",
         "effect": "catalog:",
       },

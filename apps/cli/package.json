@@ -13,6 +13,7 @@
     "@know-the-map/harness": "workspace:*",
     "@know-the-map/harness-opencode": "workspace:*",
     "@know-the-map/hermeneut": "workspace:*",
+    "@know-the-map/viewer": "workspace:*",
     "effect": "catalog:"
   }
 }
