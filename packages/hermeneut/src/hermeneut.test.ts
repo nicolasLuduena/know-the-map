@@ -9,7 +9,6 @@ import {
   NoSubmissionError,
 } from "@know-the-map/harness";
 import { Duration, Effect, Layer, Schema } from "effect";
-import { AnalysisBoundExceededError } from "./errors.ts";
 import type { AnalysisBounds, HarnessSelection } from "./hermeneut.ts";
 import { Hermeneut, HermeneutLive } from "./hermeneut.ts";
 import { AnalysisArtifact } from "./schemas.ts";
@@ -172,7 +171,11 @@ test("happy path: division then module analyses produce the artifact", async () 
   expect(root.result.components.map((component) => component.name)).toEqual(["alpha", "beta"]);
   expect(root.result.relationships).toHaveLength(1);
   expect(
-    artifact.scopes.reduce((total, scope) => total + scope.result.interpretations.length, 0),
+    artifact.scopes.reduce(
+      (total, scope) =>
+        total + (scope.result.kind === "gap" ? 0 : scope.result.interpretations.length),
+      0,
+    ),
   ).toBe(3);
   expect(artifact.files).toEqual([
     { path: "src/a.ts", hash: "aaaa", lineCount: 10 },
@@ -305,10 +308,11 @@ test("unfixable responses exhaust the clarification bound and fail loudly", asyn
   expect(outcome.left.message).toContain("clarification round(s)");
 });
 
-test("reaching the harness-call bound fails loudly", async () => {
+test("reaching the harness-call bound records a gap instead of failing the run", async () => {
+  const componentCount = 48;
   const script: Array<unknown> = [
     division({
-      components: Array.from({ length: 48 }, (_, index) => ({
+      components: Array.from({ length: componentCount }, (_, index) => ({
         id: index + 1,
         name: `c${index}`,
         summary: "leaf",
@@ -317,15 +321,23 @@ test("reaching the harness-call bound fails loudly", async () => {
       relationships: [],
       interpretations: [],
     }),
-    ...Array.from({ length: 47 }, (_, index) => module(100 + index, "src/a.ts")),
+    // One fewer module than components: the last component's exchange call
+    // is the one that finds the budget already spent.
+    ...Array.from({ length: componentCount - 1 }, (_, index) => module(100 + index, "src/a.ts")),
   ];
   const { outcome, sent } = await runAnalysis(script);
 
-  expect(outcome._tag).toBe("Left");
-  if (outcome._tag !== "Left") return;
-  expect(outcome.left).toBeInstanceOf(AnalysisBoundExceededError);
-  expect(outcome.left.message).toContain("48 model calls");
+  expect(outcome._tag).toBe("Right");
+  if (outcome._tag !== "Right") return;
+  // Every scripted exchange was still spent — nothing paid for is thrown away.
   expect(sent).toHaveLength(48);
+  const gaps = outcome.right.scopes.filter((scope) => scope.result.kind === "gap");
+  expect(gaps).toHaveLength(1);
+  const [gap] = gaps;
+  if (gap === undefined || gap.result.kind !== "gap") throw new Error("expected a gap scope");
+  expect(gap.originatingComponentId).toBe(componentCount);
+  expect(gap.result.reason).toBe("call_budget");
+  expect(gap.result.message).toContain("48 model calls");
 });
 
 test("a custom maxHarnessCalls bound is honored, not just the default", async () => {
@@ -341,7 +353,6 @@ test("a custom maxHarnessCalls bound is honored, not just the default", async ()
       interpretations: [],
     }),
     module(100, "src/a.ts"),
-    module(101, "src/a.ts"),
   ];
   const { outcome, sent } = await runAnalysis(script, {
     maxHarnessCalls: 2,
@@ -349,30 +360,67 @@ test("a custom maxHarnessCalls bound is honored, not just the default", async ()
     maxClarifications: 3,
   });
 
-  expect(outcome._tag).toBe("Left");
-  if (outcome._tag !== "Left") return;
-  expect(outcome.left).toBeInstanceOf(AnalysisBoundExceededError);
-  expect(outcome.left.message).toContain("2 model calls");
+  expect(outcome._tag).toBe("Right");
+  if (outcome._tag !== "Right") return;
   expect(sent).toHaveLength(2);
+  const gaps = outcome.right.scopes.filter((scope) => scope.result.kind === "gap");
+  expect(gaps).toHaveLength(2);
+  expect(
+    gaps.every((scope) => scope.result.kind === "gap" && scope.result.reason === "call_budget"),
+  ).toBe(true);
 });
 
-test("divisions nested beyond the max depth fail loudly", async () => {
+test("a division at the depth bound keeps its own answer and gaps each of its components", async () => {
   const nested = (base: number) =>
     division({
       components: [{ id: base, name: "inner", summary: "still divisible", files: ["src/a.ts"] }],
       relationships: [],
       interpretations: [],
     });
-  const { outcome } = await runAnalysis([nested(1), nested(10), nested(20), nested(30)], {
+  const { outcome, sent } = await runAnalysis([nested(1), nested(10), nested(20), nested(30)], {
     maxHarnessCalls: 48,
     maxDepth: 3,
     maxClarifications: 3,
   });
 
-  expect(outcome._tag).toBe("Left");
-  if (outcome._tag !== "Left") return;
-  expect(outcome.left).toBeInstanceOf(AnalysisBoundExceededError);
-  expect(outcome.left.message).toContain("max depth");
+  expect(outcome._tag).toBe("Right");
+  if (outcome._tag !== "Right") return;
+  expect(sent).toHaveLength(4);
+  const scopes = outcome.right.scopes;
+  // The division at depth 3 (the bound) is scope 4, in pre-order: it was
+  // already paid for, so it is kept as-is rather than discarded.
+  const deepest = scopes[3];
+  expect(deepest?.result.kind).toBe("division");
+  const gapScopes = scopes.filter((scope) => scope.result.kind === "gap");
+  expect(gapScopes).toHaveLength(1);
+  expect(gapScopes[0]?.parentScopeId).toBe(deepest?.id);
+  expect(gapScopes[0]?.originatingComponentId).toBe(30);
+  expect(gapScopes[0]?.result).toMatchObject({ kind: "gap", reason: "depth_exceeded" });
+});
+
+test("an artifact containing gap scopes still satisfies the artifact schema's integrity checks", async () => {
+  const script: Array<unknown> = [
+    division({
+      components: [
+        { id: 1, name: "alpha", summary: "does a", files: ["src/a.ts"] },
+        { id: 2, name: "beta", summary: "does b", files: ["src/b.ts"] },
+      ],
+      relationships: [],
+      interpretations: [],
+    }),
+    module(5, "src/a.ts"),
+  ];
+  const { outcome } = await runAnalysis(script, {
+    maxHarnessCalls: 2,
+    maxDepth: 7,
+    maxClarifications: 3,
+  });
+
+  expect(outcome._tag).toBe("Right");
+  if (outcome._tag !== "Right") return;
+  const encoded = Schema.encodeSync(AnalysisArtifact)(outcome.right);
+  const decoded = Schema.decodeUnknownSync(AnalysisArtifact)(encoded);
+  expect(decoded.scopes.filter((scope) => scope.result.kind === "gap")).toHaveLength(1);
 });
 
 test("scopes record provenance and survive model-local ids repeating across answers", async () => {
@@ -443,7 +491,14 @@ const fixture = () => {
     parentScopeId: 1 as number | null,
     originatingComponentId: 1 as number | null,
     inputPaths: ["src/a.ts"] as ReadonlyArray<string>,
-    result: { kind: "module", summary: "unit a", interpretations: [] as ReadonlyArray<unknown> },
+    // Cast so `result` can be swapped for a gap-shaped object below: the
+    // fixture's own module/division checks don't care which kind occupies
+    // this slot, only that the tree-shape invariants still hold around it.
+    result: {
+      kind: "module",
+      summary: "unit a",
+      interpretations: [] as ReadonlyArray<unknown>,
+    } as Record<string, unknown>,
   };
   const artifact = {
     version: 1,
@@ -494,6 +549,14 @@ test.each([
     "input paths that drifted from the originating component",
     "differ from the component that opened it",
     ({ leaf }: Fixture) => {
+      leaf.inputPaths = [];
+    },
+  ],
+  [
+    "a gap scope whose input paths drifted from the originating component",
+    "differ from the component that opened it",
+    ({ leaf }: Fixture) => {
+      leaf.result = { kind: "gap", reason: "call_budget", message: "budget exhausted" };
       leaf.inputPaths = [];
     },
   ],

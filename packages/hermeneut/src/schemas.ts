@@ -288,6 +288,39 @@ export type ModuleResult = Schema.Schema.Type<typeof ModuleResult>;
 export const LlmResponse = Schema.Union([DivisionResult, ModuleResult]);
 export type LlmResponse = Schema.Schema.Type<typeof LlmResponse>;
 
+export const GapReason = Schema.Union([
+  Schema.Literal("depth_exceeded").annotate({
+    description: "The scope's parent division reached the run's maximum division depth.",
+  }),
+  Schema.Literal("call_budget").annotate({
+    description: "The run exhausted its model-call budget before this scope could be explored.",
+  }),
+]);
+export type GapReason = Schema.Schema.Type<typeof GapReason>;
+
+/**
+ * The runner, never the model, produces this: a scope a bound stopped it
+ * from exploring. It carries no interpretations or components — there was
+ * no answer — but it still occupies the child-scope slot a component
+ * opened, so the "every component has an analyzed child" invariant stays
+ * satisfiable even when a run is cut short.
+ */
+export const GapResult = Schema.Struct({
+  kind: Schema.Literal("gap").annotate({
+    description: "Discriminator: the run did not explore this scope.",
+  }),
+  reason: GapReason.annotate({ description: "Why this scope was left unexplored." }),
+  message: Schema.String.annotate({
+    description: "Detail about the bound that stopped exploration.",
+  }),
+});
+export type GapResult = Schema.Schema.Type<typeof GapResult>;
+
+/** Everything an `AnalysisScope` may store: what the model answered, or a
+ * gap the runner recorded in its place. */
+export const ScopeResult = Schema.Union([DivisionResult, ModuleResult, GapResult]);
+export type ScopeResult = Schema.Schema.Type<typeof ScopeResult>;
+
 /** The state a file was analyzed at. */
 export const FileStatus = Schema.Struct({
   path: Schema.String.annotate({
@@ -306,7 +339,9 @@ export type FileStatus = Schema.Schema.Type<typeof FileStatus>;
  * One model exchange, and the code it was asked about. Scopes are the
  * recursion tree: the root scope covers the whole inventory, and every
  * component a division names opens exactly one child scope. Recording them
- * keeps the hierarchy reconstructable instead of guessed back from paths.
+ * keeps the hierarchy reconstructable instead of guessed back from paths. A
+ * scope's result is a gap, not a model answer, when a run bound stopped it
+ * from ever being explored.
  */
 export const AnalysisScope = Schema.Struct({
   id: PositiveInt.annotate({ description: "Scope id, unique within this artifact." }),
@@ -323,7 +358,9 @@ export const AnalysisScope = Schema.Struct({
   inputPaths: Schema.Array(Schema.String).annotate({
     description: "Repo-relative paths submitted for this scope.",
   }),
-  result: LlmResponse.annotate({ description: "Validated model response for this scope." }),
+  result: ScopeResult.annotate({
+    description: "Validated model response for this scope, or a recorded coverage gap.",
+  }),
 });
 export type AnalysisScope = Schema.Schema.Type<typeof AnalysisScope>;
 
@@ -394,9 +431,11 @@ const checkArtifactIntegrity = (
         }
       }
     }
-    for (const interpretation of scope.result.interpretations) {
-      for (const anchor of interpretation.anchors) {
-        requirePath(anchor.path, ["scopes", index, "result", "interpretations"], "anchor path");
+    if (scope.result.kind !== "gap") {
+      for (const interpretation of scope.result.interpretations) {
+        for (const anchor of interpretation.anchors) {
+          requirePath(anchor.path, ["scopes", index, "result", "interpretations"], "anchor path");
+        }
       }
     }
   });
