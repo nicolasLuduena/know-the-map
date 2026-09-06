@@ -73,6 +73,14 @@
         "effect": "catalog:",
       },
     },
+    "packages/viewer": {
+      "name": "@know-the-map/viewer",
+      "version": "0.0.0",
+      "dependencies": {
+        "@know-the-map/hermeneut": "workspace:*",
+        "effect": "catalog:",
+      },
+    },
   },
   "catalog": {
     "@biomejs/biome": "^2.5.11",
@@ -253,6 +261,8 @@
     "@know-the-map/harness-pi": ["@know-the-map/harness-pi@workspace:packages/harness-pi"],
 
     "@know-the-map/hermeneut": ["@know-the-map/hermeneut@workspace:packages/hermeneut"],
+
+    "@know-the-map/viewer": ["@know-the-map/viewer@workspace:packages/viewer"],
 
     "@lydell/node-pty": ["@lydell/node-pty@1.2.0-beta.12", "", { "optionalDependencies": { "@lydell/node-pty-darwin-arm64": "1.2.0-beta.12", "@lydell/node-pty-darwin-x64": "1.2.0-beta.12", "@lydell/node-pty-linux-arm64": "1.2.0-beta.12", "@lydell/node-pty-linux-x64": "1.2.0-beta.12", "@lydell/node-pty-win32-arm64": "1.2.0-beta.12", "@lydell/node-pty-win32-x64": "1.2.0-beta.12" } }, "sha512-qIK890UwPupoj07osVvgOIa++1mxeHbcGry4PKRHhNVNs81V2SCG34eJr46GybiOmBtc8Sj5PB1/GGM5PL549g=="],
 
