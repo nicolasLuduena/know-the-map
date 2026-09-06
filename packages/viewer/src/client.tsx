@@ -1,8 +1,19 @@
 import type { AnalysisScope, Interpretation } from "@know-the-map/hermeneut";
-import { DateTime, Effect, Layer } from "effect";
+import { Cause, DateTime, Effect, Layer } from "effect";
 import { RpcClient, RpcSerialization } from "effect/unstable/rpc";
 import { Socket } from "effect/unstable/socket";
-import { Component, type ReactNode, StrictMode, useEffect, useMemo, useState } from "react";
+import {
+  Component,
+  type CSSProperties,
+  type ReactNode,
+  StrictMode,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { createRoot } from "react-dom/client";
 import {
   buildViewerModel,
@@ -12,12 +23,33 @@ import {
   matchingNodes,
   type ViewerModel,
 } from "./model.ts";
-import { ViewerRpc, type ViewerSnapshot } from "./rpc.ts";
+import { type SourceFile, ViewerRpc, type ViewerSnapshot } from "./rpc.ts";
 
 /** Depth at which the outline stops opening itself on a large repository. */
 const OPEN_TO_DEPTH = 2;
 
 const ROOT_KEY = "repository" as const;
+
+/**
+ * Height of one rendered source line, in pixels. `SourceLines` below reads
+ * this same number for both its windowing maths and the CSS custom property
+ * it sets on the scroll container, so a row's computed offset and its
+ * rendered position can never drift apart — there is nowhere for a second,
+ * independently-edited number to live.
+ */
+const SOURCE_LINE_HEIGHT = 20;
+
+/** Extra lines rendered above and below the viewport, so a fast scroll never flashes empty rows. */
+const SOURCE_OVERSCAN_LINES = 20;
+
+/** An inclusive, 1-based line range to highlight and scroll to when a source pane opens. */
+interface SourceRange {
+  readonly lineStart: number;
+  readonly lineEnd: number;
+}
+
+/** Opens the source pane on `path`, highlighting `range` when given; `opener` regains focus on close. */
+type OpenSource = (path: string, range: SourceRange | undefined, opener: HTMLElement) => void;
 
 const rpcLayer = RpcClient.layerProtocolSocket().pipe(
   Layer.provide(Socket.layerWebSocket(`${location.origin.replace(/^http/, "ws")}/rpc`)),
@@ -32,6 +64,215 @@ const loadSnapshot = (): Promise<ViewerSnapshot> =>
       return yield* client.getArtifact();
     }).pipe(Effect.provide(rpcLayer), Effect.scoped),
   );
+
+/**
+ * Forked, not run to a Promise: `SourcePane` needs a live handle it can
+ * interrupt when the path it was reading stops being the one the user wants.
+ */
+const readSourceEffect = (path: string) =>
+  Effect.gen(function* () {
+    const client = yield* RpcClient.make(ViewerRpc);
+    return yield* client.readSource({ path });
+  }).pipe(Effect.provide(rpcLayer), Effect.scoped);
+
+/**
+ * Splits file content into editor-style lines: a trailing newline is not an
+ * extra blank line, matching how the server's `Git.lineCount` counts them so
+ * a cited line number always points at the same row here as it did there.
+ */
+const splitEditorLines = (content: string): ReadonlyArray<string> => {
+  const lines = content.split("\n");
+  if (lines.length > 0 && lines[lines.length - 1] === "") lines.pop();
+  return lines;
+};
+
+/**
+ * A fixed-line-height virtualized list: only the rows near the current
+ * scroll position are ever mounted. The size cap on the server still bounds
+ * a read to ~20,000 lines, and rendering that as DOM synchronously would
+ * lock the tab — this is the thing that actually prevents that, not the cap
+ * alone. `SOURCE_LINE_HEIGHT` is read here and nowhere else is a row height
+ * spelled out, so the CSS and this maths cannot drift apart.
+ */
+const SourceLines = ({
+  file,
+  range,
+}: {
+  readonly file: SourceFile;
+  readonly range: SourceRange | undefined;
+}) => {
+  const lines = useMemo(() => splitEditorLines(file.content), [file.content]);
+  const viewportRef = useRef<HTMLDivElement>(null);
+  const [scrollTop, setScrollTop] = useState(0);
+  const [viewportHeight, setViewportHeight] = useState(0);
+
+  useLayoutEffect(() => {
+    const el = viewportRef.current;
+    if (el === null) return;
+    const measure = () => {
+      setScrollTop(el.scrollTop);
+      setViewportHeight(el.clientHeight);
+    };
+    measure();
+    el.addEventListener("scroll", measure, { passive: true });
+    const resize = new ResizeObserver(measure);
+    resize.observe(el);
+    return () => {
+      el.removeEventListener("scroll", measure);
+      resize.disconnect();
+    };
+  }, []);
+
+  // Runs again whenever `range` changes even if `file` does not: two
+  // citations can land in the same already-open file.
+  useLayoutEffect(() => {
+    const el = viewportRef.current;
+    if (el === null || range === undefined) return;
+    const target = (range.lineStart - 1) * SOURCE_LINE_HEIGHT;
+    el.scrollTop = Math.max(0, target - el.clientHeight / 3);
+  }, [range, file]);
+
+  const first = Math.max(0, Math.floor(scrollTop / SOURCE_LINE_HEIGHT) - SOURCE_OVERSCAN_LINES);
+  const windowSize = Math.ceil(viewportHeight / SOURCE_LINE_HEIGHT) + SOURCE_OVERSCAN_LINES * 2;
+  const last = Math.min(lines.length, first + windowSize);
+
+  return (
+    <div
+      className="source-lines"
+      ref={viewportRef}
+      style={{ "--source-line-height": `${SOURCE_LINE_HEIGHT}px` } as CSSProperties}
+    >
+      <div className="source-lines-spacer" style={{ height: lines.length * SOURCE_LINE_HEIGHT }}>
+        <div
+          className="source-lines-window"
+          style={{ transform: `translateY(${first * SOURCE_LINE_HEIGHT}px)` }}
+        >
+          {lines.slice(first, last).map((text, index) => {
+            const lineNumber = first + index + 1;
+            const cited =
+              range !== undefined && lineNumber >= range.lineStart && lineNumber <= range.lineEnd;
+            return (
+              <div key={lineNumber} className={cited ? "source-line cited" : "source-line"}>
+                <span className="source-line-number">{lineNumber}</span>
+                <code className="source-line-text">{text}</code>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+};
+
+type SourcePaneStatus =
+  | { readonly kind: "loading" }
+  | { readonly kind: "loaded"; readonly file: SourceFile }
+  | { readonly kind: "failed"; readonly message: string };
+
+interface SourcePaneProps {
+  readonly path: string;
+  readonly range: SourceRange | undefined;
+  readonly headCommit: string;
+  readonly onClose: () => void;
+}
+
+/**
+ * The citation pane: mounted only while a citation is open, so "on open" and
+ * "on close" are exactly mount and unmount — that is what gives the focus
+ * and Escape effects below their once-per-open behaviour for free, even
+ * though clicking a second citation in the same file (a `path` that repeats
+ * with a different `range`) reuses this same instance rather than
+ * remounting it.
+ *
+ * Fetching is keyed on `path` alone: an in-flight read is interrupted by the
+ * effect's own cleanup the moment `path` changes or the pane closes, so a
+ * slow response for a citation the user already left cannot land after a
+ * newer one and overwrite it — there is no separate flag to keep in sync,
+ * the interruption *is* the guarantee.
+ */
+const SourcePane = ({ path, range, headCommit, onClose }: SourcePaneProps) => {
+  const [status, setStatus] = useState<SourcePaneStatus>({ kind: "loading" });
+  const paneRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    setStatus({ kind: "loading" });
+    const fiber = Effect.runFork(readSourceEffect(path));
+    fiber.addObserver((exit) => {
+      if (exit._tag === "Success") {
+        setStatus({ kind: "loaded", file: exit.value });
+        return;
+      }
+      // A cause that is purely an interruption is this same effect's own
+      // cleanup firing for a superseded request, not a real failure — the
+      // pane has already moved on to something else and must not report it.
+      if (Cause.hasInterruptsOnly(exit.cause)) return;
+      const failure = Cause.squash(exit.cause) as { readonly message?: unknown };
+      setStatus({
+        kind: "failed",
+        message:
+          typeof failure.message === "string" ? failure.message : "The source could not be read.",
+      });
+    });
+    return () => fiber.interruptUnsafe();
+  }, [path]);
+
+  useLayoutEffect(() => {
+    paneRef.current?.focus();
+  }, []);
+
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onClose();
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  return (
+    <div className="source-scrim">
+      {/* A pointer-only convenience: Escape and the Close button above already
+          give keyboard users a full path out, so this stays out of the tab
+          order rather than duplicating that as a second keyboard target. */}
+      <button
+        type="button"
+        className="source-scrim-backdrop"
+        aria-label="Close source"
+        tabIndex={-1}
+        onClick={onClose}
+      />
+      <div
+        className="source-pane"
+        role="dialog"
+        aria-modal="true"
+        aria-label={`Source: ${path}`}
+        ref={paneRef}
+        tabIndex={-1}
+      >
+        <header className="source-pane-head">
+          <div>
+            <code>{path}</code>
+            <span className="revision">
+              <code>{headCommit.slice(0, 12)}</code>
+              {range !== undefined && (
+                <span className="lines">
+                  :{range.lineStart}&ndash;{range.lineEnd}
+                </span>
+              )}
+            </span>
+          </div>
+          <button type="button" className="linkish" onClick={onClose}>
+            Close
+          </button>
+        </header>
+        <div className="source-pane-body">
+          {status.kind === "loading" && <p role="status">Reading&hellip;</p>}
+          {status.kind === "failed" && <p className="detail">{status.message}</p>}
+          {status.kind === "loaded" && <SourceLines file={status.file} range={range} />}
+        </div>
+      </div>
+    </div>
+  );
+};
 
 /**
  * `2026-09-06 04:31 UTC`. The seconds and milliseconds are noise here — the
@@ -154,7 +395,13 @@ const Outline = (props: OutlineProps) => {
   );
 };
 
-const Claim = ({ interpretation }: { readonly interpretation: Interpretation }) => (
+const Claim = ({
+  interpretation,
+  onOpenSource,
+}: {
+  readonly interpretation: Interpretation;
+  readonly onOpenSource: OpenSource;
+}) => (
   <li className="claim">
     <div className="claim-head">
       <span className="claim-kind">{kindOf(interpretation)}</span>
@@ -163,12 +410,23 @@ const Claim = ({ interpretation }: { readonly interpretation: Interpretation }) 
     <ul className="anchors">
       {interpretation.anchors.map((anchor) => (
         <li key={`${anchor.path}:${anchor.lineStart}:${anchor.lineEnd}`}>
-          <code>
-            {anchor.path}
-            <span className="lines">
-              :{anchor.lineStart}&ndash;{anchor.lineEnd}
-            </span>
-          </code>
+          <button
+            type="button"
+            onClick={(event) =>
+              onOpenSource(
+                anchor.path,
+                { lineStart: anchor.lineStart, lineEnd: anchor.lineEnd },
+                event.currentTarget,
+              )
+            }
+          >
+            <code>
+              {anchor.path}
+              <span className="lines">
+                :{anchor.lineStart}&ndash;{anchor.lineEnd}
+              </span>
+            </code>
+          </button>
         </li>
       ))}
     </ul>
@@ -180,9 +438,10 @@ interface ScopeViewProps {
   readonly node: ComponentNode | undefined;
   readonly repositoryName: string;
   readonly onSelect: (key: string) => void;
+  readonly onOpenSource: OpenSource;
 }
 
-const ScopeView = ({ scope, node, repositoryName, onSelect }: ScopeViewProps) => {
+const ScopeView = ({ scope, node, repositoryName, onSelect, onOpenSource }: ScopeViewProps) => {
   const result = scope.result;
   return (
     <>
@@ -258,7 +517,11 @@ const ScopeView = ({ scope, node, repositoryName, onSelect }: ScopeViewProps) =>
           ) : (
             <ul className="claims">
               {result.interpretations.map((interpretation) => (
-                <Claim key={interpretation.id} interpretation={interpretation} />
+                <Claim
+                  key={interpretation.id}
+                  interpretation={interpretation}
+                  onOpenSource={onOpenSource}
+                />
               ))}
             </ul>
           )}
@@ -272,7 +535,12 @@ const ScopeView = ({ scope, node, repositoryName, onSelect }: ScopeViewProps) =>
         <ul className="files">
           {scope.inputPaths.map((path) => (
             <li key={path}>
-              <code>{path}</code>
+              <button
+                type="button"
+                onClick={(event) => onOpenSource(path, undefined, event.currentTarget)}
+              >
+                <code>{path}</code>
+              </button>
             </li>
           ))}
         </ul>
@@ -329,6 +597,21 @@ const Workspace = ({ snapshot }: { readonly snapshot: ViewerSnapshot }) => {
     const onPop = () => setSelected(location.hash.slice(1) || ROOT_KEY);
     addEventListener("popstate", onPop);
     return () => removeEventListener("popstate", onPop);
+  }, []);
+
+  const [pane, setPane] = useState<{
+    readonly path: string;
+    readonly range: SourceRange | undefined;
+  }>();
+  const paneOpenerRef = useRef<HTMLElement | null>(null);
+
+  const openSource = useCallback<OpenSource>((path, range, opener) => {
+    paneOpenerRef.current = opener;
+    setPane({ path, range });
+  }, []);
+  const closeSource = useCallback(() => {
+    setPane(undefined);
+    paneOpenerRef.current?.focus();
   }, []);
 
   const visible = useMemo(() => matchingNodes(model, query), [model, query]);
@@ -427,10 +710,19 @@ const Workspace = ({ snapshot }: { readonly snapshot: ViewerSnapshot }) => {
               node={node}
               repositoryName={snapshot.repositoryName}
               onSelect={select}
+              onOpenSource={openSource}
             />
           </>
         )}
       </main>
+      {pane !== undefined && (
+        <SourcePane
+          path={pane.path}
+          range={pane.range}
+          headCommit={snapshot.artifact.headCommit}
+          onClose={closeSource}
+        />
+      )}
     </div>
   );
 };

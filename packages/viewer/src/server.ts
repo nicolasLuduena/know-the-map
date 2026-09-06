@@ -13,7 +13,7 @@ import {
   HttpServerResponse,
 } from "effect/unstable/http";
 import { RpcSerialization, RpcServer } from "effect/unstable/rpc";
-import { ViewerRpc, type ViewerSnapshot } from "./rpc.ts";
+import { type SourceFile, SourceReadError, ViewerRpc, type ViewerSnapshot } from "./rpc.ts";
 
 const PAGE = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Saved analysis · Know the Map</title><link rel="stylesheet" href="/styles.css"></head><body><div id="root"></div><script type="module" src="/client.js"></script></body></html>`;
 
@@ -41,6 +41,14 @@ const buildClient = (): Promise<string> => {
 
 /** Where the RPC contract is served. */
 const RPC_PATH = "/rpc" as const;
+
+/**
+ * Largest source file the viewer will read for the citation pane. A cap
+ * exists so the pane's virtualized list, not an unbounded read, is the thing
+ * that decides how large a file it can show.
+ * TODO(config): expose the source-read size cap.
+ */
+const MAX_SOURCE_BYTES = 1024 * 1024;
 
 /** Hostnames a loopback-only server will answer to. */
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "[::1]", "localhost"]);
@@ -166,6 +174,56 @@ export const startViewer = Effect.fn("startViewer")(function* (options: ViewerOp
   );
   const snapshot: ViewerSnapshot = { repositoryName: basename(repo.root), artifact };
 
+  // Built once at startup, not scanned per request: the inventory is fixed
+  // for the life of the process (see the comment on `startViewer` above),
+  // and this is also the security boundary a `readSource` request must
+  // clear before git is ever asked for a path.
+  const filesByPath = new Map(artifact.files.map((file) => [file.path, file] as const));
+
+  const readSource = Effect.fn("ViewerServer.readSource")(function* ({
+    path,
+  }: {
+    readonly path: string;
+  }): Effect.fn.Return<SourceFile, SourceReadError> {
+    const file = yield* Effect.succeed(filesByPath.get(path)).pipe(
+      Effect.filterOrFail(
+        (entry) => entry !== undefined,
+        () =>
+          new SourceReadError({
+            message: `"${path}" is not part of this analysis.`,
+            reason: "not_in_analysis",
+          }),
+      ),
+    );
+    const read = yield* options.git
+      .readSnapshotFile(repo.root, artifact.headCommit, path, file.hash, MAX_SOURCE_BYTES)
+      .pipe(
+        Effect.catchTag(
+          "SnapshotFileError",
+          (cause) =>
+            new SourceReadError({
+              message:
+                cause.reason === "binary"
+                  ? `"${path}" is a binary file and cannot be shown as source.`
+                  : cause.reason === "too_large"
+                    ? `"${path}" is too large to display (over ${MAX_SOURCE_BYTES} bytes).`
+                    : `"${path}" no longer matches what was analyzed; rerun "ktm analyze" to refresh it.`,
+              reason:
+                cause.reason === "binary" || cause.reason === "too_large" ? cause.reason : "stale",
+            }),
+        ),
+        Effect.catchTag(
+          "GitCommandError",
+          (cause) =>
+            new SourceReadError({
+              message: `"${path}" could not be read from the repository: ${cause.message}`,
+              reason: "unreadable",
+            }),
+        ),
+      );
+    return { path, content: read.content, hash: read.hash } satisfies SourceFile;
+  });
+
   const client = yield* Effect.tryPromise({
     try: buildClient,
     catch: (cause) =>
@@ -220,7 +278,7 @@ export const startViewer = Effect.fn("startViewer")(function* (options: ViewerOp
     path: RPC_PATH,
     protocol: "websocket",
   }).pipe(
-    Layer.provide(ViewerRpc.toLayer({ getArtifact: () => Effect.succeed(snapshot) })),
+    Layer.provide(ViewerRpc.toLayer({ getArtifact: () => Effect.succeed(snapshot), readSource })),
     Layer.merge(staticLayer),
   );
 
