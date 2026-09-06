@@ -610,3 +610,41 @@ test.each([
   corrupt(built);
   expect(() => Schema.decodeUnknownSync(AnalysisArtifact)(built.artifact)).toThrow(expected);
 });
+
+test("a budget spent mid-tree still leaves every component with a child scope", async () => {
+  // Three levels, and the budget runs out partway down the first branch:
+  // the second branch is never explored at all. The decode below is the
+  // real assertion — an artifact where any component lost its child scope
+  // cannot pass the integrity checks.
+  const { outcome, sent } = await runAnalysis(
+    [
+      division({
+        components: [
+          { id: 1, name: "alpha", summary: "does a", files: ["src/a.ts"] },
+          { id: 2, name: "beta", summary: "does b", files: ["src/b.ts"] },
+        ],
+        relationships: [],
+        interpretations: [],
+      }),
+      division({
+        components: [{ id: 1, name: "inner", summary: "nested", files: ["src/a.ts"] }],
+        relationships: [],
+        interpretations: [],
+      }),
+      module(9, "src/a.ts"),
+    ],
+    { maxHarnessCalls: 3, maxDepth: 7, maxClarifications: 3 },
+  );
+
+  expect(outcome._tag).toBe("Right");
+  if (outcome._tag !== "Right") return;
+  expect(sent).toHaveLength(3);
+  expect(outcome.right.scopes.map((scope) => scope.result.kind)).toEqual([
+    "division",
+    "division",
+    "module",
+    "gap",
+  ]);
+  const encoded = Schema.encodeSync(AnalysisArtifact)(outcome.right);
+  expect(Schema.decodeUnknownSync(AnalysisArtifact)(encoded).scopes).toHaveLength(4);
+});
