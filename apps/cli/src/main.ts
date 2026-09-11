@@ -85,6 +85,7 @@ const analyze = Command.make(
       const divisions = artifact.scopes.flatMap((scope) =>
         scope.result.kind === "division" ? [scope.result] : [],
       );
+      const gaps = artifact.scopes.filter((scope) => scope.result.kind === "gap").length;
       yield* Console.log(`scopes: ${artifact.scopes.length}`);
       yield* Console.log(
         `components: ${divisions.reduce((total, it) => total + it.components.length, 0)}`,
@@ -93,8 +94,12 @@ const analyze = Command.make(
         `relationships: ${divisions.reduce((total, it) => total + it.relationships.length, 0)}`,
       );
       yield* Console.log(
-        `interpretations: ${artifact.scopes.reduce((total, it) => total + it.result.interpretations.length, 0)}`,
+        `interpretations: ${artifact.scopes.reduce(
+          (total, it) => total + (it.result.kind === "gap" ? 0 : it.result.interpretations.length),
+          0,
+        )}`,
       );
+      yield* Console.log(`coverage gaps: ${gaps}`);
       yield* Console.log(`wrote ${OUTPUT_PATH} (head ${artifact.headCommit})`);
     }),
 ).pipe(Command.withDescription("Analyze a repository, writing .ktm/analysis.json"));

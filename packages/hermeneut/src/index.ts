@@ -1,4 +1,3 @@
-export { AnalysisBoundExceededError } from "./errors.ts";
 export type { AnalyzeError, HarnessSelection } from "./hermeneut.ts";
 export { AnalysisBounds, defaultAnalysisBounds, Hermeneut, HermeneutLive } from "./hermeneut.ts";
 export { clarificationPrompt, SYSTEM_PROMPT, scopePrompt } from "./prompts.ts";
@@ -11,6 +10,8 @@ export {
   componentKey,
   DivisionResult,
   FileStatus,
+  GapReason,
+  GapResult,
   Interpretation,
   InterpretationKind,
   LlmResponse,
@@ -18,6 +19,7 @@ export {
   PositiveInt,
   Relationship,
   RelationshipKind,
+  ScopeResult,
 } from "./schemas.ts";
 export type { ClaimIssue, ValidationContext } from "./validation.ts";
 export { validateResponse } from "./validation.ts";

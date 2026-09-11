@@ -14,7 +14,7 @@ import {
   SYSTEM_PROMPT,
   scopePrompt,
 } from "./prompts.ts";
-import type { AnalysisArtifact, AnalysisScope, FileStatus } from "./schemas.ts";
+import type { AnalysisArtifact, AnalysisScope, FileStatus, ScopeResult } from "./schemas.ts";
 import { LlmResponse, PositiveInt } from "./schemas.ts";
 import { validateResponse } from "./validation.ts";
 
@@ -40,7 +40,15 @@ export type HarnessSelection = Pick<
   "model" | "turnTimeout" | "maxGenerationTokens"
 >;
 
-export type AnalyzeError = GitError | HarnessError | AnalysisBoundExceededError;
+export type AnalyzeError = GitError | HarnessError;
+
+/**
+ * `exchange`'s own error channel, wider than `AnalyzeError`: reaching the
+ * call budget is a control-flow signal for `visit`, its only caller, which
+ * catches the tag and turns it into a gap scope. It never needs to be part
+ * of `analyze()`'s public failure contract.
+ */
+type ExchangeError = AnalyzeError | AnalysisBoundExceededError;
 
 /**
  * The deterministic leader of the interpretation process.
@@ -101,13 +109,15 @@ export const HermeneutLive: Layer.Layer<Hermeneut, never, Git | Harness> = Layer
       const exchange = Effect.fn("Hermeneut.exchange")(function* (
         session: HarnessSession,
         scopePaths: ReadonlyArray<string>,
-      ): Effect.fn.Return<LlmResponse, AnalyzeError> {
+      ): Effect.fn.Return<LlmResponse, ExchangeError> {
         let prompt = scopePrompt(scopePaths);
         let clarifications = 0;
         while (true) {
           if (calls >= bounds.maxHarnessCalls) {
-            // TODO(ux): before giving up, offer to continue and report the
-            // cost the sessions have accumulated — tracked as an issue.
+            // The caller (visit) turns this into a gap scope rather than
+            // failing the run; the sessions already spent are kept.
+            // TODO(ux): offer to resume analysis from the recorded gaps in
+            // a follow-up run, instead of only reporting that they exist.
             return yield* new AnalysisBoundExceededError({
               message: `analysis stopped after ${bounds.maxHarnessCalls} model calls`,
             });
@@ -180,7 +190,19 @@ export const HermeneutLive: Layer.Layer<Hermeneut, never, Git | Harness> = Layer
         for (const path of scopePaths) {
           referenced.add(path);
         }
-        const response = yield* exchange(session, scopePaths);
+        // The call budget has already paid for every scope explored so
+        // far; running out on this one is a reason to stop here, not to
+        // discard everything the run already produced. Recording a gap
+        // lets the run return what it has instead of failing outright.
+        const response: ScopeResult = yield* exchange(session, scopePaths).pipe(
+          Effect.catchTag("AnalysisBoundExceededError", (error) =>
+            Effect.succeed({
+              kind: "gap" as const,
+              reason: "call_budget" as const,
+              message: error.message,
+            }),
+          ),
+        );
         const scopeId = nextScopeId++;
         // Pushed before recursing, so `scopes` ends up in pre-order: a
         // parent always precedes the children it opened.
@@ -191,6 +213,9 @@ export const HermeneutLive: Layer.Layer<Hermeneut, never, Git | Harness> = Layer
           inputPaths: scopePaths,
           result: response,
         });
+        if (response.kind === "gap") {
+          return;
+        }
         for (const interpretation of response.interpretations) {
           for (const anchor of interpretation.anchors) {
             referenced.add(anchor.path);
@@ -200,9 +225,26 @@ export const HermeneutLive: Layer.Layer<Hermeneut, never, Git | Harness> = Layer
           return;
         }
         if (depth >= bounds.maxDepth) {
-          return yield* new AnalysisBoundExceededError({
-            message: `division at depth ${depth} would exceed the max depth of ${bounds.maxDepth}`,
-          });
+          // The division itself was already paid for and is worth keeping;
+          // only its components go unexplored, each as its own gap, so the
+          // "every component has an analyzed child" invariant still holds.
+          for (const component of response.components) {
+            for (const path of component.files) {
+              referenced.add(path);
+            }
+            scopes.push({
+              id: nextScopeId++,
+              parentScopeId: scopeId,
+              originatingComponentId: component.id,
+              inputPaths: component.files,
+              result: {
+                kind: "gap",
+                reason: "depth_exceeded",
+                message: `division at depth ${depth} would exceed the max depth of ${bounds.maxDepth}`,
+              },
+            });
+          }
+          return;
         }
         for (const component of response.components) {
           yield* visit(session, component.files, depth + 1, scopeId, component.id);
