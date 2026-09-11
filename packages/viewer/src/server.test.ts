@@ -8,16 +8,28 @@ import { AnalysisArtifact } from "@know-the-map/hermeneut";
 import { Effect, Layer, Schema } from "effect";
 import { RpcClient, RpcSerialization } from "effect/unstable/rpc";
 import { Socket } from "effect/unstable/socket";
-import { ViewerRpc } from "./rpc.ts";
+import { SourceReadError, ViewerRpc } from "./rpc.ts";
 import { startViewer, ViewerStartupError } from "./server.ts";
 
 let directory: string;
 let artifactPath: string;
+let aHash: string;
+let binHash: string;
+let bigHash: string;
+
+/** Valid-shaped but never-assigned object id, for a recorded hash that cannot match anything. */
+const STALE_HASH = "1".repeat(40);
+
+/** Bytes over `MAX_SOURCE_BYTES` (1 MiB) in server.ts, to exercise the size cap. */
+const OVERSIZED_LENGTH = 1024 * 1024 + 1;
 
 const gitRun = (args: Array<string>): void => {
   const result = Bun.spawnSync(["git", "-C", directory, ...args]);
   if (result.exitCode !== 0) throw new Error(result.stderr.toString());
 };
+
+const gitHashObject = (path: string): string =>
+  Bun.spawnSync(["git", "-C", directory, "hash-object", "--", path]).stdout.toString().trim();
 
 const gitLayer = GitLive.pipe(Layer.provide(BunServices.layer));
 
@@ -59,7 +71,15 @@ const validArtifact = (headCommit: string) => ({
   version: 1,
   headCommit,
   generatedAt: "2026-09-06T00:00:00.000Z",
-  files: [{ path: "a.ts", hash: "0".repeat(40), lineCount: 1 }],
+  files: [
+    { path: "a.ts", hash: aHash, lineCount: 1 },
+    { path: "bin.dat", hash: binHash, lineCount: 1 },
+    { path: "big.txt", hash: bigHash, lineCount: 1 },
+    // Recorded hash deliberately does not match the committed blob: the
+    // repository content no longer matches what the artifact says it
+    // analyzed.
+    { path: "stale.ts", hash: STALE_HASH, lineCount: 1 },
+  ],
   scopes: [
     {
       id: 1,
@@ -75,11 +95,17 @@ beforeAll(() => {
   directory = mkdtempSync(join(tmpdir(), "ktm-viewer-"));
   gitRun(["init", "--initial-branch=main"]);
   writeFileSync(join(directory, "a.ts"), "one\n");
+  writeFileSync(join(directory, "bin.dat"), Buffer.from([0, 1, 2, 0, 4, 5]));
+  writeFileSync(join(directory, "big.txt"), "a".repeat(OVERSIZED_LENGTH));
+  writeFileSync(join(directory, "stale.ts"), "committed content\n");
   gitRun(["add", "."]);
   gitRun(["-c", "user.name=Test", "-c", "user.email=test@test", "commit", "-m", "fixture"]);
   const head = Bun.spawnSync(["git", "-C", directory, "rev-parse", "HEAD"])
     .stdout.toString()
     .trim();
+  aHash = gitHashObject(join(directory, "a.ts"));
+  binHash = gitHashObject(join(directory, "bin.dat"));
+  bigHash = gitHashObject(join(directory, "big.txt"));
   artifactPath = join(directory, "analysis.json");
   writeFileSync(artifactPath, JSON.stringify(validArtifact(head)));
   // Dirty the worktree: viewing committed analysis must not require a clean
@@ -101,6 +127,58 @@ test("serves the saved analysis over RPC, with a dirty worktree", async () => {
 
   expect(snapshot.repositoryName).toBe(basename(directory));
   expect(snapshot.artifact.scopes).toHaveLength(1);
+});
+
+const readSource = (path: string) =>
+  withViewer(artifactPath, (url) =>
+    Effect.gen(function* () {
+      const client = yield* RpcClient.make(ViewerRpc);
+      return yield* client.readSource({ path }).pipe(Effect.result);
+    }).pipe(Effect.scoped, Effect.provide(clientLayer(url, url.replace(/\/$/, "")))),
+  );
+
+test("reads a cited file's committed content, even with a dirty worktree", async () => {
+  const outcome = await readSource("a.ts");
+
+  expect(outcome._tag).toBe("Success");
+  if (outcome._tag !== "Success") return;
+  // The worktree was dirtied to "edited after the commit\n" in beforeAll;
+  // seeing the committed content proves the read is pinned to headCommit,
+  // not to whatever is on disk right now.
+  expect(outcome.success.content).toBe("one\n");
+});
+
+test("refuses a path that is not part of the analyzed file inventory", async () => {
+  const outcome = await readSource("never-analyzed.ts");
+
+  expect(outcome._tag).toBe("Failure");
+  if (outcome._tag !== "Failure") return;
+  expect(outcome.failure).toBeInstanceOf(SourceReadError);
+  expect((outcome.failure as SourceReadError).reason).toBe("not_in_analysis");
+});
+
+test("reports a recorded hash that no longer matches the repository as stale", async () => {
+  const outcome = await readSource("stale.ts");
+
+  expect(outcome._tag).toBe("Failure");
+  if (outcome._tag !== "Failure") return;
+  expect((outcome.failure as SourceReadError).reason).toBe("stale");
+});
+
+test("reports a binary file distinctly from a stale or oversized one", async () => {
+  const outcome = await readSource("bin.dat");
+
+  expect(outcome._tag).toBe("Failure");
+  if (outcome._tag !== "Failure") return;
+  expect((outcome.failure as SourceReadError).reason).toBe("binary");
+});
+
+test("reports a file over the size cap distinctly from binary or stale", async () => {
+  const outcome = await readSource("big.txt");
+
+  expect(outcome._tag).toBe("Failure");
+  if (outcome._tag !== "Failure") return;
+  expect((outcome.failure as SourceReadError).reason).toBe("too_large");
 });
 
 test("refuses a foreign Host, a foreign Origin, and an Origin-less RPC upgrade", async () => {
