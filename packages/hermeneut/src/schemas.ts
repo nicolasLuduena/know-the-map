@@ -302,24 +302,190 @@ export const FileStatus = Schema.Struct({
 });
 export type FileStatus = Schema.Schema.Type<typeof FileStatus>;
 
-export const AnalysisArtifact = Schema.Struct({
+/**
+ * One model exchange, and the code it was asked about. Scopes are the
+ * recursion tree: the root scope covers the whole inventory, and every
+ * component a division names opens exactly one child scope. Recording them
+ * keeps the hierarchy reconstructable instead of guessed back from paths.
+ */
+export const AnalysisScope = Schema.Struct({
+  id: PositiveInt.annotate({ description: "Scope id, unique within this artifact." }),
+  parentScopeId: Schema.NullOr(PositiveInt).annotate({
+    description: "Parent scope id, or null for the repository root scope.",
+  }),
+  originatingComponentId: Schema.NullOr(PositiveInt).annotate({
+    // Component ids are the model's own handles and only unique within one
+    // answer, so this id alone does not identify a component: the pair
+    // (parentScopeId, originatingComponentId) does.
+    description:
+      "Id of the component in the parent division that opened this scope, or null at the root.",
+  }),
+  inputPaths: Schema.Array(Schema.String).annotate({
+    description: "Repo-relative paths submitted for this scope.",
+  }),
+  result: LlmResponse.annotate({ description: "Validated model response for this scope." }),
+});
+export type AnalysisScope = Schema.Schema.Type<typeof AnalysisScope>;
+
+/**
+ * Stable identity of a component across the whole artifact. Component ids
+ * repeat freely between answers, so anything that indexes, links to, or
+ * deduplicates components keys on this pair rather than on the id alone.
+ */
+export const componentKey = (scopeId: number, componentId: number): string =>
+  `${scopeId}:${componentId}`;
+
+/**
+ * Structural shape of a saved analysis, without the cross-field checks that
+ * `AnalysisArtifact` adds. Decode with this only where the value already
+ * passed `AnalysisArtifact` at a trust boundary: the checks below walk the
+ * whole tree, and repeating that on data the process just validated buys
+ * nothing.
+ */
+export const AnalysisArtifactShape = Schema.Struct({
+  version: Schema.Literal(1).annotate({ description: "Analysis artifact format version." }),
   headCommit: Schema.String.annotate({
     description: "Git commit hash the analysis was made against.",
   }),
   generatedAt: Schema.DateTimeUtcFromString.annotate({
     description: "UTC instant the artifact was generated.",
   }),
-  components: Schema.Array(Component).annotate({
-    description: "Every component recorded across the whole analysis session.",
-  }),
-  relationships: Schema.Array(Relationship).annotate({
-    description: "Every relationship recorded across the whole analysis session.",
-  }),
-  interpretations: Schema.Array(Interpretation).annotate({
-    description: "Every interpretation recorded across the whole analysis session.",
-  }),
   files: Schema.Array(FileStatus).annotate({
     description: "Every file the analysis referenced, with the state it was analyzed at.",
   }),
+  scopes: Schema.Array(AnalysisScope).annotate({
+    description: "Every exploration scope, in traversal order, with its hierarchy and response.",
+  }),
 });
+export type AnalysisArtifactShape = Schema.Schema.Type<typeof AnalysisArtifactShape>;
+
+/**
+ * Invariants no combination of field schemas can express: the scopes form
+ * one tree, every component in that tree was explored, and every path any
+ * claim names was in the analyzed inventory.
+ */
+const checkArtifactIntegrity = (
+  artifact: AnalysisArtifactShape,
+): ReadonlyArray<Schema.FilterIssue> => {
+  const issues: Array<Schema.FilterIssue> = [];
+  const inventory = new Set(artifact.files.map((file) => file.path));
+  if (inventory.size !== artifact.files.length) {
+    issues.push({ path: ["files"], issue: "file inventory contains duplicate paths" });
+  }
+  const requirePath = (path: string, at: ReadonlyArray<PropertyKey>, label: string): void => {
+    if (!inventory.has(path)) {
+      issues.push({ path: at, issue: `${label} "${path}" is missing from the file inventory` });
+    }
+  };
+
+  const byId = new Map<number, AnalysisScope>();
+  artifact.scopes.forEach((scope, index) => {
+    if (byId.has(scope.id)) {
+      issues.push({ path: ["scopes", index, "id"], issue: `duplicate scope id ${scope.id}` });
+    }
+    byId.set(scope.id, scope);
+    for (const path of scope.inputPaths) {
+      requirePath(path, ["scopes", index, "inputPaths"], "path");
+    }
+    if (scope.result.kind === "division") {
+      for (const component of scope.result.components) {
+        for (const path of component.files) {
+          requirePath(path, ["scopes", index, "result", "components"], "path");
+        }
+      }
+    }
+    for (const interpretation of scope.result.interpretations) {
+      for (const anchor of interpretation.anchors) {
+        requirePath(anchor.path, ["scopes", index, "result", "interpretations"], "anchor path");
+      }
+    }
+  });
+
+  const roots = artifact.scopes.filter((scope) => scope.parentScopeId === null);
+  if (roots.length !== 1) {
+    issues.push({ path: ["scopes"], issue: "an artifact must contain exactly one root scope" });
+  }
+
+  // A component is identified by (parent scope, component id); this records
+  // which of those pairs a child scope has already claimed, so a component
+  // explored twice and a component never explored are both detectable.
+  const explored = new Set<string>();
+  artifact.scopes.forEach((scope, index) => {
+    if (scope.parentScopeId === null) {
+      if (scope.originatingComponentId !== null) {
+        issues.push({
+          path: ["scopes", index, "originatingComponentId"],
+          issue: "the root scope cannot originate from a component",
+        });
+      }
+      return;
+    }
+    const parent = byId.get(scope.parentScopeId);
+    const component =
+      parent?.result.kind === "division"
+        ? parent.result.components.find((it) => it.id === scope.originatingComponentId)
+        : undefined;
+    if (parent === undefined || component === undefined) {
+      issues.push({
+        path: ["scopes", index],
+        issue: "scope does not originate from a component of a division scope",
+      });
+      return;
+    }
+    const owner = componentKey(parent.id, component.id);
+    if (explored.has(owner)) {
+      issues.push({
+        path: ["scopes", index],
+        issue: `component ${owner} has more than one child scope`,
+      });
+    }
+    explored.add(owner);
+    if (component.files.join("\0") !== scope.inputPaths.join("\0")) {
+      issues.push({
+        path: ["scopes", index, "inputPaths"],
+        issue: "scope input paths differ from the component that opened it",
+      });
+    }
+  });
+
+  for (const scope of artifact.scopes) {
+    if (scope.result.kind !== "division") continue;
+    for (const component of scope.result.components) {
+      const key = componentKey(scope.id, component.id);
+      if (!explored.has(key)) {
+        issues.push({ path: ["scopes"], issue: `component ${key} has no analyzed child scope` });
+      }
+    }
+  }
+
+  const root = roots[0];
+  if (root !== undefined) {
+    const childrenOf = new Map<number, Array<AnalysisScope>>();
+    for (const scope of artifact.scopes) {
+      if (scope.parentScopeId === null) continue;
+      const siblings = childrenOf.get(scope.parentScopeId);
+      if (siblings === undefined) childrenOf.set(scope.parentScopeId, [scope]);
+      else siblings.push(scope);
+    }
+    const reachable = new Set<number>();
+    const pending = [root];
+    while (pending.length > 0) {
+      const scope = pending.pop();
+      if (scope === undefined || reachable.has(scope.id)) continue;
+      reachable.add(scope.id);
+      pending.push(...(childrenOf.get(scope.id) ?? []));
+    }
+    if (reachable.size !== artifact.scopes.length) {
+      issues.push({
+        path: ["scopes"],
+        issue: "the scope hierarchy contains a cycle or an unreachable scope",
+      });
+    }
+  }
+  return issues;
+};
+
+export const AnalysisArtifact = AnalysisArtifactShape.check(
+  Schema.makeFilter(checkArtifactIntegrity),
+);
 export type AnalysisArtifact = Schema.Schema.Type<typeof AnalysisArtifact>;

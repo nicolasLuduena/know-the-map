@@ -12,7 +12,7 @@ import { Duration, Effect, Layer, Schema } from "effect";
 import { AnalysisBoundExceededError } from "./errors.ts";
 import type { AnalysisBounds, HarnessSelection } from "./hermeneut.ts";
 import { Hermeneut, HermeneutLive } from "./hermeneut.ts";
-import type { AnalysisArtifact } from "./schemas.ts";
+import { AnalysisArtifact } from "./schemas.ts";
 
 const TEST_HARNESS_SELECTION: HarnessSelection = {
   model: { providerId: "opencode-go", modelId: "deepseek-v4-flash" },
@@ -166,9 +166,14 @@ test("happy path: division then module analyses produce the artifact", async () 
   if (outcome._tag !== "Right") return;
   const artifact: AnalysisArtifact = outcome.right;
   expect(artifact.headCommit).toBe(FIXTURE.headCommit);
-  expect(artifact.components.map((component) => component.name)).toEqual(["alpha", "beta"]);
-  expect(artifact.relationships).toHaveLength(1);
-  expect(artifact.interpretations).toHaveLength(3);
+  expect(artifact.version).toBe(1);
+  const root = artifact.scopes[0];
+  if (root?.result.kind !== "division") throw new Error("root scope should be a division");
+  expect(root.result.components.map((component) => component.name)).toEqual(["alpha", "beta"]);
+  expect(root.result.relationships).toHaveLength(1);
+  expect(
+    artifact.scopes.reduce((total, scope) => total + scope.result.interpretations.length, 0),
+  ).toBe(3);
   expect(artifact.files).toEqual([
     { path: "src/a.ts", hash: "aaaa", lineCount: 10 },
     { path: "src/b.ts", hash: "bbbb", lineCount: 5 },
@@ -368,4 +373,177 @@ test("divisions nested beyond the max depth fail loudly", async () => {
   if (outcome._tag !== "Left") return;
   expect(outcome.left).toBeInstanceOf(AnalysisBoundExceededError);
   expect(outcome.left.message).toContain("max depth");
+});
+
+test("scopes record provenance and survive model-local ids repeating across answers", async () => {
+  const { outcome, sent } = await runAnalysis([
+    division(),
+    division({
+      // Reuses id 1 and a component name from the root division: ids are
+      // only unique within one answer, so provenance must not rely on them.
+      components: [{ id: 1, name: "alpha", summary: "nested alpha", files: ["src/a.ts"] }],
+      relationships: [],
+      interpretations: [],
+    }),
+    module(1, "src/a.ts"),
+    module(1, "src/b.ts"),
+  ]);
+
+  expect(outcome._tag).toBe("Right");
+  if (outcome._tag !== "Right") throw new Error("analysis failed");
+  expect(sent).toHaveLength(4);
+  expect(
+    outcome.right.scopes.map(({ id, parentScopeId, originatingComponentId }) => ({
+      id,
+      parentScopeId,
+      originatingComponentId,
+    })),
+  ).toEqual([
+    { id: 1, parentScopeId: null, originatingComponentId: null },
+    { id: 2, parentScopeId: 1, originatingComponentId: 1 },
+    { id: 3, parentScopeId: 2, originatingComponentId: 1 },
+    { id: 4, parentScopeId: 1, originatingComponentId: 2 },
+  ]);
+  expect(outcome.right.scopes[2]?.result.kind).toBe("module");
+});
+
+test("a produced artifact satisfies the artifact schema's own integrity checks", async () => {
+  const { outcome } = await runAnalysis([division(), module(5, "src/a.ts"), module(7, "src/b.ts")]);
+
+  expect(outcome._tag).toBe("Right");
+  if (outcome._tag !== "Right") throw new Error("analysis failed");
+  // Round-tripping proves the emitted value is not merely well-typed but
+  // passes every cross-field check: one root, one child scope per
+  // component, and no path outside the recorded inventory.
+  const encoded = Schema.encodeSync(AnalysisArtifact)(outcome.right);
+  expect(Schema.decodeUnknownSync(AnalysisArtifact)(encoded).scopes).toHaveLength(3);
+});
+
+/**
+ * A tree that satisfies every integrity check, handed back with its scopes
+ * named so the mutations below can corrupt one invariant at a time without
+ * indexing into the array.
+ */
+const fixture = () => {
+  const alpha = { id: 1, name: "alpha", summary: "does a", files: ["src/a.ts"] };
+  const root = {
+    id: 1,
+    parentScopeId: null as number | null,
+    originatingComponentId: null as number | null,
+    inputPaths: ["src/a.ts"] as ReadonlyArray<string>,
+    result: {
+      kind: "division",
+      components: [alpha],
+      relationships: [] as ReadonlyArray<unknown>,
+      interpretations: [] as ReadonlyArray<unknown>,
+    },
+  };
+  const leaf = {
+    id: 2,
+    parentScopeId: 1 as number | null,
+    originatingComponentId: 1 as number | null,
+    inputPaths: ["src/a.ts"] as ReadonlyArray<string>,
+    result: { kind: "module", summary: "unit a", interpretations: [] as ReadonlyArray<unknown> },
+  };
+  const artifact = {
+    version: 1,
+    headCommit: FIXTURE.headCommit,
+    generatedAt: "2026-09-05T12:00:00.000Z",
+    files: [{ path: "src/a.ts", hash: "aaaa", lineCount: 10 }],
+    scopes: [root, leaf] as Array<unknown>,
+  };
+  return { artifact, root, leaf };
+};
+type Fixture = ReturnType<typeof fixture>;
+
+test("the artifact schema accepts a well-formed tree", () => {
+  expect(Schema.decodeUnknownSync(AnalysisArtifact)(fixture().artifact).scopes).toHaveLength(2);
+});
+
+test.each([
+  [
+    "two root scopes",
+    "exactly one root scope",
+    ({ leaf }: Fixture) => {
+      leaf.parentScopeId = null;
+      leaf.originatingComponentId = null;
+    },
+  ],
+  [
+    "a root that claims a parent component",
+    "root scope cannot originate from a component",
+    ({ root }: Fixture) => {
+      root.originatingComponentId = 1;
+    },
+  ],
+  [
+    "a duplicate scope id",
+    "duplicate scope id 1",
+    ({ leaf }: Fixture) => {
+      leaf.id = 1;
+    },
+  ],
+  [
+    "a scope orphaned from its parent",
+    "does not originate from a component of a division scope",
+    ({ leaf }: Fixture) => {
+      leaf.originatingComponentId = 99;
+    },
+  ],
+  [
+    "input paths that drifted from the originating component",
+    "differ from the component that opened it",
+    ({ leaf }: Fixture) => {
+      leaf.inputPaths = [];
+    },
+  ],
+  [
+    "a path outside the recorded inventory",
+    "missing from the file inventory",
+    ({ artifact }: Fixture) => {
+      artifact.files = [];
+    },
+  ],
+  [
+    "a duplicated inventory path",
+    "duplicate paths",
+    ({ artifact }: Fixture) => {
+      artifact.files = [...artifact.files, { path: "src/a.ts", hash: "aaaa", lineCount: 10 }];
+    },
+  ],
+  [
+    "an unexplored component",
+    "has no analyzed child scope",
+    ({ root }: Fixture) => {
+      root.result.components = [
+        ...root.result.components,
+        { id: 2, name: "beta", summary: "does b", files: ["src/a.ts"] },
+      ];
+    },
+  ],
+  [
+    "a scope unreachable from the root",
+    "cycle or an unreachable scope",
+    ({ artifact, root }: Fixture) => {
+      // Scope 3 is its own parent, so no path from the root ever reaches it.
+      root.result.components = [
+        ...root.result.components,
+        { id: 2, name: "beta", summary: "does b", files: ["src/a.ts"] },
+      ];
+      artifact.scopes = [
+        ...artifact.scopes,
+        {
+          id: 3,
+          parentScopeId: 3,
+          originatingComponentId: 2,
+          inputPaths: ["src/a.ts"],
+          result: { kind: "module", summary: "unit b", interpretations: [] },
+        },
+      ];
+    },
+  ],
+])("the artifact schema rejects %s", (_name, expected, corrupt) => {
+  const built = fixture();
+  corrupt(built);
+  expect(() => Schema.decodeUnknownSync(AnalysisArtifact)(built.artifact)).toThrow(expected);
 });
