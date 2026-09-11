@@ -127,6 +127,41 @@ test("refuses a foreign Host, a foreign Origin, and an Origin-less RPC upgrade",
   expect(statuses.noOrigin).toBe(403);
 });
 
+test("serves the interface, its bundle and its stylesheet, all fenced", async () => {
+  const served = await withViewer(artifactPath, (url) =>
+    Effect.promise(async () => {
+      const host = new URL(url).host;
+      const page = await fetch(url, { headers: { Host: host } });
+      const script = await fetch(`${url}client.js`, { headers: { Host: host } });
+      const styles = await fetch(`${url}styles.css`, { headers: { Host: host } });
+      const foreign = await fetch(url, { headers: { Host: "evil.example" } });
+      return {
+        pageStatus: page.status,
+        pageBody: await page.text(),
+        csp: page.headers.get("content-security-policy") ?? "",
+        scriptType: script.headers.get("content-type") ?? "",
+        scriptBody: await script.text(),
+        stylesType: styles.headers.get("content-type") ?? "",
+        stylesBody: await styles.text(),
+        foreignStatus: foreign.status,
+      };
+    }),
+  );
+
+  expect(served.pageStatus).toBe(200);
+  expect(served.pageBody).toContain('id="root"');
+  expect(served.pageBody).toContain('src="/client.js"');
+  // Nothing on the page may load from anywhere but this origin.
+  expect(served.csp).toContain("default-src 'none'");
+  expect(served.csp).toContain("connect-src 'self'");
+  expect(served.scriptType).toContain("text/javascript");
+  expect(served.scriptBody.length).toBeGreaterThan(1000);
+  expect(served.stylesType).toContain("text/css");
+  expect(served.stylesBody).toContain("--signal");
+  // The fence covers the interface, not just the RPC path.
+  expect(served.foreignStatus).toBe(403);
+});
+
 test("a missing artifact fails to start with an actionable message", async () => {
   const outcome = await Effect.runPromise(
     Effect.gen(function* () {

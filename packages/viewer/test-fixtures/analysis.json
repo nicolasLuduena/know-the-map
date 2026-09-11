@@ -1,0 +1,382 @@
+{
+  "version": 1,
+  "headCommit": "6caff882889e7f9bfcabec04cc0b2025f1104acc",
+  "generatedAt": "2026-09-06T17:15:32.000Z",
+  "files": [
+    {
+      "path": "packages/git/src/git.ts",
+      "hash": "d98ac455579ff9eb95d0cea8a6949ba72056d9ca",
+      "lineCount": 576
+    },
+    {
+      "path": "packages/git/src/errors.ts",
+      "hash": "43947cffbfcc0a8d9508d60f7dd7c4fab839a62c",
+      "lineCount": 24
+    },
+    {
+      "path": "packages/hermeneut/src/schemas.ts",
+      "hash": "b76912c7fcf16da1a0e6b3e0348b2b1ecfd6b3bf",
+      "lineCount": 530
+    },
+    {
+      "path": "packages/hermeneut/src/hermeneut.ts",
+      "hash": "e83616238b650070ca1a34e944e3aa09d23ac257",
+      "lineCount": 295
+    },
+    {
+      "path": "packages/hermeneut/src/validation.ts",
+      "hash": "51466db9629228c9d37a49eebaee93ab20e3b9ae",
+      "lineCount": 77
+    },
+    {
+      "path": "packages/viewer/src/model.ts",
+      "hash": "a458197c0f168b19029667c209dbc04641e778a1",
+      "lineCount": 242
+    },
+    {
+      "path": "packages/viewer/src/server.ts",
+      "hash": "da2e5abeaed29ba2e97ecaae8f75a6321cfb6b92",
+      "lineCount": 272
+    },
+    {
+      "path": "apps/cli/src/main.ts",
+      "hash": "df3dc131dfac75bde9d482365f3ffb78f6450552",
+      "lineCount": 153
+    }
+  ],
+  "scopes": [
+    {
+      "id": 1,
+      "parentScopeId": null,
+      "originatingComponentId": null,
+      "inputPaths": [
+        "packages/git/src/git.ts",
+        "packages/git/src/errors.ts",
+        "packages/hermeneut/src/schemas.ts",
+        "packages/hermeneut/src/hermeneut.ts",
+        "packages/hermeneut/src/validation.ts",
+        "packages/viewer/src/model.ts",
+        "packages/viewer/src/server.ts",
+        "apps/cli/src/main.ts"
+      ],
+      "result": {
+        "kind": "division",
+        "components": [
+          {
+            "id": 1,
+            "name": "Repository access",
+            "summary": "Reads the repository through git, and is the oracle every claim is checked against.",
+            "files": ["packages/git/src/git.ts", "packages/git/src/errors.ts"]
+          },
+          {
+            "id": 2,
+            "name": "Analysis loop",
+            "summary": "Drives the model conversation, validates each answer, and assembles the saved artifact.",
+            "files": [
+              "packages/hermeneut/src/schemas.ts",
+              "packages/hermeneut/src/hermeneut.ts",
+              "packages/hermeneut/src/validation.ts"
+            ]
+          },
+          {
+            "id": 3,
+            "name": "Viewer",
+            "summary": "Serves a saved analysis to a browser over a typed RPC contract.",
+            "files": ["packages/viewer/src/model.ts", "packages/viewer/src/server.ts"]
+          },
+          {
+            "id": 4,
+            "name": "Command line",
+            "summary": "The ktm entry point; owns which subcommand gets a model harness.",
+            "files": ["apps/cli/src/main.ts"]
+          }
+        ],
+        "relationships": [
+          {
+            "id": 5,
+            "from": "Analysis loop",
+            "to": "Repository access",
+            "description": "Every path and line range the model claims is checked against the repository before it is recorded.",
+            "kind": "uses"
+          },
+          {
+            "id": 6,
+            "from": "Viewer",
+            "to": "Repository access",
+            "description": "Source is read at the analyzed commit, never from the working tree.",
+            "kind": "reads"
+          },
+          {
+            "id": 7,
+            "from": "Command line",
+            "to": "Analysis loop",
+            "description": "ktm analyze runs one bounded analysis and writes the artifact.",
+            "kind": "calls"
+          },
+          {
+            "id": 8,
+            "from": "Command line",
+            "to": "Viewer",
+            "description": "ktm view starts the loopback server without ever starting a harness.",
+            "kind": "calls"
+          }
+        ],
+        "interpretations": [
+          {
+            "id": 9,
+            "text": "The repository is a Bun workspace split by responsibility: git access, the analysis loop, the viewer, and one executable that wires them together.",
+            "anchors": [
+              {
+                "path": "apps/cli/src/main.ts",
+                "lineStart": 1,
+                "lineEnd": 20
+              }
+            ],
+            "kind": "role"
+          },
+          {
+            "id": 10,
+            "text": "Only the analyze subcommand provides a model harness, so viewing a saved analysis can never make a model call.",
+            "anchors": [
+              {
+                "path": "apps/cli/src/main.ts",
+                "lineStart": 104,
+                "lineEnd": 118
+              }
+            ],
+            "kind": "invariant"
+          }
+        ]
+      }
+    },
+    {
+      "id": 2,
+      "parentScopeId": 1,
+      "originatingComponentId": 1,
+      "inputPaths": ["packages/git/src/git.ts", "packages/git/src/errors.ts"],
+      "result": {
+        "kind": "module",
+        "summary": "A read-only view over the repository: resolve, inventory, line counts, and reading a file's content at an exact commit.",
+        "interpretations": [
+          {
+            "id": 11,
+            "text": "Analysis refuses a dirty worktree, because the artifact pins blob hashes that only describe a clean tree.",
+            "anchors": [
+              {
+                "path": "packages/git/src/git.ts",
+                "lineStart": 390,
+                "lineEnd": 405
+              }
+            ],
+            "kind": "precondition"
+          },
+          {
+            "id": 12,
+            "text": "A snapshot read never trusts caller input: the commit and blob hash must be full hex object ids and the path must be repo-relative, all checked by schema before any subprocess runs.",
+            "anchors": [
+              {
+                "path": "packages/git/src/git.ts",
+                "lineStart": 191,
+                "lineEnd": 210
+              }
+            ],
+            "kind": "invariant"
+          },
+          {
+            "id": 13,
+            "text": "A blob's size is read before its content, so an oversized file is refused without being pulled into memory.",
+            "anchors": [
+              {
+                "path": "packages/git/src/git.ts",
+                "lineStart": 470,
+                "lineEnd": 500
+              }
+            ],
+            "kind": "effect"
+          }
+        ]
+      }
+    },
+    {
+      "id": 3,
+      "parentScopeId": 1,
+      "originatingComponentId": 2,
+      "inputPaths": [
+        "packages/hermeneut/src/schemas.ts",
+        "packages/hermeneut/src/hermeneut.ts",
+        "packages/hermeneut/src/validation.ts"
+      ],
+      "result": {
+        "kind": "division",
+        "components": [
+          {
+            "id": 1,
+            "name": "Artifact schema",
+            "summary": "The saved format, and the cross-field invariants that no field schema can express.",
+            "files": ["packages/hermeneut/src/schemas.ts"]
+          },
+          {
+            "id": 2,
+            "name": "Exploration",
+            "summary": "Recursive division, clarification rounds, and coverage gaps when a bound is hit.",
+            "files": ["packages/hermeneut/src/hermeneut.ts"]
+          },
+          {
+            "id": 3,
+            "name": "Claim validation",
+            "summary": "Checks every path and line range a model answer names against the repository.",
+            "files": ["packages/hermeneut/src/validation.ts"]
+          }
+        ],
+        "relationships": [
+          {
+            "id": 4,
+            "from": "Exploration",
+            "to": "Claim validation",
+            "description": "Each answer is validated before it is recorded; failures become another clarification round.",
+            "kind": "calls"
+          },
+          {
+            "id": 5,
+            "from": "Exploration",
+            "to": "Artifact schema",
+            "description": "One scope is appended per model exchange, carrying the component that opened it.",
+            "kind": "writes"
+          }
+        ],
+        "interpretations": [
+          {
+            "id": 6,
+            "text": "A component id is only unique within one answer, so a component is identified across the artifact by the pair of its parent scope and its id.",
+            "anchors": [
+              {
+                "path": "packages/hermeneut/src/schemas.ts",
+                "lineStart": 305,
+                "lineEnd": 335
+              }
+            ],
+            "kind": "invariant"
+          }
+        ]
+      }
+    },
+    {
+      "id": 4,
+      "parentScopeId": 3,
+      "originatingComponentId": 1,
+      "inputPaths": ["packages/hermeneut/src/schemas.ts"],
+      "result": {
+        "kind": "module",
+        "summary": "Every schema the analysis speaks, from one model answer up to the whole saved artifact.",
+        "interpretations": [
+          {
+            "id": 7,
+            "text": "Every component named by a division has exactly one child scope; a gap scope is what makes that satisfiable when a run is cut short.",
+            "anchors": [
+              {
+                "path": "packages/hermeneut/src/schemas.ts",
+                "lineStart": 420,
+                "lineEnd": 440
+              }
+            ],
+            "kind": "invariant"
+          },
+          {
+            "id": 8,
+            "text": "A decoded artifact is a single tree: one root, no cycles, and no scope unreachable from it.",
+            "anchors": [
+              {
+                "path": "packages/hermeneut/src/schemas.ts",
+                "lineStart": 470,
+                "lineEnd": 495
+              }
+            ],
+            "kind": "postcondition"
+          }
+        ]
+      }
+    },
+    {
+      "id": 5,
+      "parentScopeId": 3,
+      "originatingComponentId": 2,
+      "inputPaths": ["packages/hermeneut/src/hermeneut.ts"],
+      "result": {
+        "kind": "gap",
+        "reason": "call_budget",
+        "message": "analysis stopped after 48 model calls"
+      }
+    },
+    {
+      "id": 6,
+      "parentScopeId": 3,
+      "originatingComponentId": 3,
+      "inputPaths": ["packages/hermeneut/src/validation.ts"],
+      "result": {
+        "kind": "gap",
+        "reason": "call_budget",
+        "message": "analysis stopped after 48 model calls"
+      }
+    },
+    {
+      "id": 7,
+      "parentScopeId": 1,
+      "originatingComponentId": 3,
+      "inputPaths": ["packages/viewer/src/model.ts", "packages/viewer/src/server.ts"],
+      "result": {
+        "kind": "module",
+        "summary": "Rebuilds the component tree from saved scopes and serves it to a browser on loopback.",
+        "interpretations": [
+          {
+            "id": 14,
+            "text": "The interface is fenced by two checks: Host must name a loopback address, and Origin must be this exact server.",
+            "anchors": [
+              {
+                "path": "packages/viewer/src/server.ts",
+                "lineStart": 60,
+                "lineEnd": 100
+              }
+            ],
+            "kind": "invariant"
+          },
+          {
+            "id": 15,
+            "text": "Rebuilding the tree is pure: it takes a decoded artifact and returns nodes, with no I/O of its own.",
+            "anchors": [
+              {
+                "path": "packages/viewer/src/model.ts",
+                "lineStart": 110,
+                "lineEnd": 160
+              }
+            ],
+            "kind": "role"
+          }
+        ]
+      }
+    },
+    {
+      "id": 8,
+      "parentScopeId": 1,
+      "originatingComponentId": 4,
+      "inputPaths": ["apps/cli/src/main.ts"],
+      "result": {
+        "kind": "module",
+        "summary": "Two subcommands: analyze writes a saved analysis, view opens one in a browser.",
+        "interpretations": [
+          {
+            "id": 16,
+            "text": "analyze writes .ktm/analysis.json encoded through the artifact schema, so what lands on disk is exactly what decodes back.",
+            "anchors": [
+              {
+                "path": "apps/cli/src/main.ts",
+                "lineStart": 78,
+                "lineEnd": 90
+              }
+            ],
+            "kind": "effect"
+          }
+        ]
+      }
+    }
+  ]
+}

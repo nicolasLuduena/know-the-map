@@ -11,13 +11,17 @@
     "@effect/platform-bun": "4.0.0-rc.112",
     "@opencode-ai/plugin": "0.0.0-dev-18567",
     "@opencode-ai/sdk": "0.0.0-dev-18567",
+    "@types/bun": "latest",
+    "@types/react": "^19.1.10",
+    "@types/react-dom": "^19.1.7",
     "effect": "4.0.0-rc.112",
-    "typescript": "^5",
-    "@types/bun": "latest"
+    "react": "^19.1.1",
+    "react-dom": "^19.1.1",
+    "typescript": "^5"
   },
   "scripts": {
     "test": "bun test packages apps",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p packages/viewer/tsconfig.browser.json",
     "check": "biome check packages apps",
     "fix": "biome check --write packages apps",
     "ktm": "bun run apps/cli/src/main.ts"

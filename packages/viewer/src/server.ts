@@ -1,10 +1,12 @@
 import { basename, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { BunHttpServer } from "@effect/platform-bun";
 import type { Git } from "@know-the-map/git";
 import { guard } from "@know-the-map/harness";
 import { AnalysisArtifact } from "@know-the-map/hermeneut";
-import { Deferred, Effect, Layer, Schema } from "effect";
+import { Deferred, Effect, Layer, Option, Schema } from "effect";
 import {
+  Headers,
   HttpRouter,
   HttpServer,
   HttpServerRequest,
@@ -12,6 +14,30 @@ import {
 } from "effect/unstable/http";
 import { RpcSerialization, RpcServer } from "effect/unstable/rpc";
 import { ViewerRpc, type ViewerSnapshot } from "./rpc.ts";
+
+const PAGE = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Saved analysis · Know the Map</title><link rel="stylesheet" href="/styles.css"></head><body><div id="root"></div><script type="module" src="/client.js"></script></body></html>`;
+
+/**
+ * The browser bundle, built once for the life of the process. The sources
+ * cannot change while the server runs, and `Bun.build` does not survive
+ * being invoked repeatedly in one process.
+ */
+let clientBundle: Promise<string> | undefined;
+const buildClient = (): Promise<string> => {
+  clientBundle ??= Bun.build({
+    entrypoints: [fileURLToPath(new URL("./client.tsx", import.meta.url))],
+    target: "browser",
+    minify: true,
+    define: { "process.env.NODE_ENV": JSON.stringify("production") },
+  }).then((built) => {
+    const output = built.outputs[0];
+    if (!built.success || output === undefined) {
+      throw new Error(built.logs.map(String).join("; "));
+    }
+    return output.text();
+  });
+  return clientBundle;
+};
 
 /** Where the RPC contract is served. */
 const RPC_PATH = "/rpc" as const;
@@ -72,12 +98,12 @@ const loopbackOnly = <E, R>(
 > =>
   Effect.gen(function* () {
     const request = yield* HttpServerRequest.HttpServerRequest;
-    const host = request.headers["host"];
+    const host = Headers.get(request.headers, "host").pipe(Option.getOrUndefined);
     const hostname = host === undefined ? undefined : host.replace(/:\d+$/, "");
     if (hostname === undefined || !LOOPBACK_HOSTS.has(hostname)) {
       return HttpServerResponse.text("viewer only answers on loopback", { status: 403 });
     }
-    const origin = request.headers["origin"];
+    const origin = Headers.get(request.headers, "origin").pipe(Option.getOrUndefined);
     const isRpc = new URL(request.url, `http://${host}`).pathname === RPC_PATH;
     if (origin === undefined) {
       return isRpc ? HttpServerResponse.text("origin required", { status: 403 }) : yield* app;
@@ -140,11 +166,63 @@ export const startViewer = Effect.fn("startViewer")(function* (options: ViewerOp
   );
   const snapshot: ViewerSnapshot = { repositoryName: basename(repo.root), artifact };
 
+  const client = yield* Effect.tryPromise({
+    try: buildClient,
+    catch: (cause) =>
+      new ViewerStartupError({ message: "the viewer interface could not be built", cause }),
+  });
+  const styles = yield* Effect.tryPromise({
+    try: () => Bun.file(new URL("./styles.css", import.meta.url)).text(),
+    catch: (cause) =>
+      new ViewerStartupError({ message: "the viewer stylesheet could not be read", cause }),
+  });
+
+  // Everything the page needs is served from this origin, so nothing may be
+  // fetched from anywhere else. `connect-src` covers the RPC WebSocket,
+  // which is same-origin.
+  const csp =
+    "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
+  const assetHeaders = { "cache-control": "no-store", "content-security-policy": csp };
+
+  const staticLayer = Layer.effectDiscard(
+    Effect.gen(function* () {
+      const router = yield* HttpRouter.HttpRouter;
+      yield* router.add(
+        "GET",
+        "/",
+        HttpServerResponse.text(PAGE, {
+          headers: {
+            ...assetHeaders,
+            "content-type": "text/html; charset=utf-8",
+            "referrer-policy": "no-referrer",
+          },
+        }),
+      );
+      yield* router.add(
+        "GET",
+        "/client.js",
+        HttpServerResponse.text(client, {
+          headers: { ...assetHeaders, "content-type": "text/javascript; charset=utf-8" },
+        }),
+      );
+      yield* router.add(
+        "GET",
+        "/styles.css",
+        HttpServerResponse.text(styles, {
+          headers: { ...assetHeaders, "content-type": "text/css; charset=utf-8" },
+        }),
+      );
+    }),
+  );
+
   const rpcLayer = RpcServer.layerHttp({
     group: ViewerRpc,
     path: RPC_PATH,
     protocol: "websocket",
-  }).pipe(Layer.provide(ViewerRpc.toLayer({ getArtifact: () => Effect.succeed(snapshot) })));
+  }).pipe(
+    Layer.provide(ViewerRpc.toLayer({ getArtifact: () => Effect.succeed(snapshot) })),
+    Layer.merge(staticLayer),
+  );
 
   // `Layer.launch` runs the serving loop; a layer that is only built binds
   // the port and then answers 503, so the server is launched in a forked

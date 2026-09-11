@@ -1,0 +1,605 @@
+/*
+ * Palette and type are the committed Know the Map identity
+ * (docs/brand/BRAND_MANUAL.md), not choices made here. Signal (#c7f23d) is
+ * reserved by the manual for "one change, focus, or transition only" — it
+ * appears on the current spine node and on coverage gaps, nowhere else.
+ */
+:root {
+  --paper: #f5f1e8;
+  --surface: #fbf9f4;
+  --ink: #0b1f2a;
+  --fog: #dde5e2;
+  --mineral: #2f7f78;
+  --signal: #c7f23d;
+  --slate: #536a74;
+  --line: #c8d2cf;
+
+  --bg: var(--paper);
+  --fg: var(--ink);
+  --on-signal: var(--ink);
+
+  --sans: Inter, "Helvetica Neue", Arial, sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  color-scheme: light dark;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --paper: #0b1f2a;
+    --surface: #12303d;
+    --ink: #f5f1e8;
+    --fog: #17394a;
+    --mineral: #58b0a6;
+    --slate: #93a9b3;
+    --line: #24485a;
+    --bg: #0b1f2a;
+    --fg: #f5f1e8;
+  }
+}
+
+:root[data-theme="dark"] {
+  --paper: #0b1f2a;
+  --surface: #12303d;
+  --ink: #f5f1e8;
+  --fog: #17394a;
+  --mineral: #58b0a6;
+  --slate: #93a9b3;
+  --line: #24485a;
+  --bg: #0b1f2a;
+  --fg: #f5f1e8;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--sans);
+  font-size: 15px;
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+}
+
+button,
+input {
+  font: inherit;
+  color: inherit;
+}
+
+button {
+  background: none;
+  border: none;
+  cursor: pointer;
+  text-align: left;
+}
+
+:focus-visible {
+  outline: 2px solid var(--mineral);
+  outline-offset: 2px;
+}
+
+code {
+  font-family: var(--mono);
+  font-size: 0.88em;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* ---- shell ------------------------------------------------------------ */
+
+.workspace {
+  min-height: 100dvh;
+  display: grid;
+  grid-template-columns: minmax(240px, 300px) minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
+.masthead {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 16px 32px;
+  padding: 14px 28px;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface);
+}
+
+.identity {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+/* The K-route symbol reduced to its essential: a node on a route. */
+.mark {
+  width: 26px;
+  height: 26px;
+  flex: none;
+  border-radius: 50%;
+  border: 2px solid var(--ink);
+  background: linear-gradient(var(--ink), var(--ink)) center / 100% 2px no-repeat;
+}
+
+.identity strong {
+  display: block;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+.revision {
+  display: flex;
+  gap: 10px;
+  color: var(--slate);
+  font-size: 12px;
+}
+
+.revision code,
+.revision time {
+  font-family: var(--mono);
+  font-size: 12px;
+}
+
+/* ---- coverage --------------------------------------------------------- */
+
+.coverage {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 12px;
+  color: var(--slate);
+}
+
+.coverage-label {
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-size: 11px;
+}
+
+.coverage-track {
+  display: block;
+  width: 132px;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--fog);
+  overflow: hidden;
+}
+
+.coverage-fill {
+  display: block;
+  height: 100%;
+  background: var(--mineral);
+}
+
+.coverage-value {
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--fg);
+}
+
+/* ---- outline ---------------------------------------------------------- */
+
+.outline {
+  border-right: 1px solid var(--line);
+  padding: 16px 12px 40px;
+  overflow-y: auto;
+  max-height: calc(100dvh - 61px);
+  position: sticky;
+  top: 0;
+}
+
+.search input {
+  width: 100%;
+  padding: 7px 10px;
+  margin-bottom: 12px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: var(--bg);
+}
+
+.outline ul {
+  list-style: none;
+  margin: 0;
+  padding: 0 0 0 13px;
+}
+
+.outline > ul {
+  padding-left: 0;
+}
+
+.outline li {
+  /* The route each nested component hangs from. */
+  border-left: 1px solid var(--line);
+  margin-left: 7px;
+  padding-left: 6px;
+}
+
+.outline > ul > li {
+  border-left: none;
+  margin-left: 0;
+  padding-left: 0;
+}
+
+.outline-row {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.disclosure,
+.disclosure-gap {
+  width: 18px;
+  flex: none;
+  color: var(--slate);
+  font-size: 11px;
+  text-align: center;
+}
+
+.outline-item {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 4px 8px;
+  border-radius: 5px;
+}
+
+.outline-item.root {
+  margin-bottom: 6px;
+  font-weight: 600;
+}
+
+.outline-item:hover {
+  background: var(--fog);
+}
+
+.outline-item.selected {
+  background: var(--fog);
+  font-weight: 600;
+}
+
+.outline-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tag {
+  flex: none;
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--slate);
+}
+
+/*
+ * Absence, drawn as absence: a dashed outline rather than a filled chip.
+ * The manual keeps Signal for one focus and caps it at 5% of the surface,
+ * so it stays on the current spine node and the region you are reading —
+ * a column of filled pills would drown both.
+ */
+.tag.gap {
+  color: var(--slate);
+  border: 1px dashed var(--line);
+  padding: 0 5px;
+  border-radius: 3px;
+  letter-spacing: 0.02em;
+}
+
+.coverage .tag.gap {
+  border: none;
+  padding: 0;
+}
+
+/* ---- detail ----------------------------------------------------------- */
+
+.detail-pane {
+  padding: 24px 32px 72px;
+  max-width: 860px;
+}
+
+.spine {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0;
+  margin-bottom: 22px;
+  font-size: 12px;
+}
+
+/* Nodes joined by routes: the identity's grammar, not a breadcrumb. */
+.spine-node {
+  position: relative;
+  padding: 3px 10px 3px 18px;
+  color: var(--slate);
+  font-family: var(--mono);
+  border-radius: 4px;
+}
+
+.spine-node::before {
+  content: "";
+  position: absolute;
+  left: 4px;
+  top: 50%;
+  width: 7px;
+  height: 7px;
+  margin-top: -3.5px;
+  border-radius: 50%;
+  border: 1.5px solid var(--slate);
+  background: var(--bg);
+}
+
+.spine-node + .spine-node::after {
+  content: "";
+  position: absolute;
+  left: -6px;
+  top: 50%;
+  width: 14px;
+  height: 1px;
+  background: var(--line);
+}
+
+.spine-node:hover {
+  color: var(--fg);
+}
+
+.spine-node.current {
+  color: var(--fg);
+  font-weight: 600;
+}
+
+.spine-node.current::before {
+  background: var(--signal);
+  border-color: var(--ink);
+}
+
+.scope-head h1 {
+  margin: 0 0 6px;
+  font-size: 27px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  text-wrap: balance;
+}
+
+.summary {
+  margin: 0 0 8px;
+  max-width: 66ch;
+  color: var(--fg);
+}
+
+.detail {
+  color: var(--slate);
+  margin: 0;
+  max-width: 66ch;
+}
+
+/*
+ * Continuous regions separated by rules, per the UI options doc: dividers
+ * and disclosure rather than every fact in its own rounded card.
+ */
+.region {
+  margin-top: 30px;
+  padding-top: 18px;
+  border-top: 1px solid var(--line);
+}
+
+.region h1,
+.region h2 {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin: 0 0 12px;
+  font-size: 12px;
+  font-weight: 600;
+  font-family: var(--mono);
+  text-transform: uppercase;
+  letter-spacing: 0.09em;
+  color: var(--mineral);
+}
+
+.region h1 {
+  font-size: 22px;
+  font-family: var(--sans);
+  text-transform: none;
+  letter-spacing: -0.02em;
+  color: var(--fg);
+}
+
+.count {
+  font-variant-numeric: tabular-nums;
+  color: var(--slate);
+  font-weight: 400;
+}
+
+.region.unexplored {
+  border-left: 3px solid var(--signal);
+  padding-left: 16px;
+  border-top-color: var(--line);
+}
+
+.parts,
+.routes,
+.claims,
+.files,
+.anchors {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.parts li + li,
+.routes li + li,
+.claims li + li {
+  border-top: 1px solid var(--line);
+}
+
+.parts button {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 2px 16px;
+  width: 100%;
+  padding: 11px 8px;
+  border-radius: 5px;
+}
+
+.parts button:hover {
+  background: var(--fog);
+}
+
+.part-name {
+  font-weight: 600;
+}
+
+.part-summary {
+  grid-column: 1;
+  color: var(--slate);
+  font-size: 13.5px;
+}
+
+.part-files {
+  grid-row: 1;
+  grid-column: 2;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--slate);
+  white-space: nowrap;
+}
+
+.routes li {
+  padding: 11px 8px;
+}
+
+.route-line {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0 0 3px;
+}
+
+.endpoint {
+  font-family: var(--mono);
+  font-size: 13px;
+}
+
+.route-kind {
+  position: relative;
+  padding: 0 14px;
+  font-size: 11px;
+  color: var(--mineral);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.route-kind::before,
+.route-kind::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  width: 10px;
+  height: 1px;
+  background: var(--line);
+}
+
+.route-kind::before {
+  left: 0;
+}
+
+.route-kind::after {
+  right: 0;
+}
+
+.claim {
+  padding: 13px 8px;
+}
+
+.claim p {
+  margin: 0 0 6px;
+  max-width: 66ch;
+}
+
+.claim-kind {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--mineral);
+}
+
+.anchors {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+}
+
+.anchors code,
+.files code {
+  color: var(--slate);
+  font-size: 12px;
+}
+
+.lines {
+  color: var(--mineral);
+}
+
+.files {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.linkish {
+  padding: 0;
+  color: var(--mineral);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.notice {
+  max-width: 60ch;
+  margin: 18vh auto;
+  padding: 0 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.notice h1 {
+  margin: 0;
+  font-size: 22px;
+  letter-spacing: -0.02em;
+}
+
+.empty {
+  margin-top: 12px;
+}
+
+@media (max-width: 780px) {
+  .workspace {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .outline {
+    position: static;
+    max-height: none;
+    border-right: none;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .detail-pane {
+    padding: 20px 20px 64px;
+  }
+}

@@ -11,6 +11,12 @@
     "@know-the-map/git": "workspace:*",
     "@know-the-map/harness": "workspace:*",
     "@know-the-map/hermeneut": "workspace:*",
-    "effect": "catalog:"
+    "effect": "catalog:",
+    "react": "catalog:",
+    "react-dom": "catalog:"
+  },
+  "devDependencies": {
+    "@types/react": "catalog:",
+    "@types/react-dom": "catalog:"
   }
 }
