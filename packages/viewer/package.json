@@ -7,6 +7,9 @@
     ".": "./src/index.ts"
   },
   "dependencies": {
+    "@effect/platform-bun": "catalog:",
+    "@know-the-map/git": "workspace:*",
+    "@know-the-map/harness": "workspace:*",
     "@know-the-map/hermeneut": "workspace:*",
     "effect": "catalog:"
   }
