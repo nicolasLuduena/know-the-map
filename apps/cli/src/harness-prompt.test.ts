@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import type { HarnessModelOption } from "@know-the-map/harness";
 import { Duration, Effect, Option } from "effect";
+import type { HarnessPreferences } from "./harness-preferences.ts";
 import { resolveHarnessSelection } from "./harness-prompt.ts";
 
 const catalog: ReadonlyArray<HarnessModelOption> = [
@@ -12,19 +13,15 @@ const catalog: ReadonlyArray<HarnessModelOption> = [
     limit: { context: 1, output: 1 },
   },
   {
-    providerId: "openrouter",
-    modelId: "google/gemini-2.5-flash",
-    modelName: "Gemini",
+    providerId: "gateway",
+    modelId: "vendor/model",
+    modelName: "Vendor Model",
     variants: [],
     limit: { context: 1, output: 1 },
   },
 ];
 
-const resolve = (
-  ref: string,
-  variant?: string,
-  defaults?: Parameters<typeof resolveHarnessSelection>[3],
-) =>
+const resolve = (ref: string, variant?: string, defaults?: Option.Option<HarnessPreferences>) =>
   Effect.runPromiseExit(
     resolveHarnessSelection(
       catalog,
@@ -49,10 +46,10 @@ test("resolves provider/model with a variant and the defaults", async () => {
 });
 
 test("splits at the first slash so a model id may contain one", async () => {
-  const exit = await resolve("openrouter/google/gemini-2.5-flash");
+  const exit = await resolve("gateway/vendor/model");
   expect(exit._tag).toBe("Success");
   if (exit._tag === "Success") {
-    expect(exit.value.model.modelId).toBe("google/gemini-2.5-flash");
+    expect(exit.value.model.modelId).toBe("vendor/model");
     expect(exit.value.model.variantId).toBeUndefined();
   }
 });
