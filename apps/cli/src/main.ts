@@ -12,10 +12,10 @@ import {
   HermeneutLive,
 } from "@know-the-map/hermeneut";
 import { startViewer } from "@know-the-map/viewer";
-import { Config, Console, Effect, Layer, Schema } from "effect";
+import { Config, Console, Effect, Layer, Option, Schema } from "effect";
 import { Argument, Command, Flag, Prompt } from "effect/unstable/cli";
 import { readHarnessPreferences, writeHarnessPreferences } from "./harness-preferences.ts";
-import { promptHarnessSelection } from "./harness-prompt.ts";
+import { promptHarnessSelection, resolveHarnessSelection } from "./harness-prompt.ts";
 
 const VERSION = "0.0.0";
 const OUTPUT_PATH = join(".ktm", "analysis.json");
@@ -37,8 +37,25 @@ const analyze = Command.make(
       Flag.withFallbackConfig(Config.int("KTM_MAX_CLARIFICATIONS")),
       Flag.withDefault(defaultAnalysisBounds.maxClarifications),
     ),
+    model: Flag.string("model").pipe(
+      Flag.withDescription(
+        "Skip the interactive picker: provider/model as the picker lists them (e.g. opencode-go/deepseek-v4.1-flash)",
+      ),
+      Flag.withFallbackConfig(Config.string("KTM_MODEL")),
+      Flag.optional,
+    ),
+    variant: Flag.string("variant").pipe(
+      Flag.withDescription("Reasoning / variant for --model; the provider's default when omitted"),
+      Flag.withFallbackConfig(Config.string("KTM_VARIANT")),
+      Flag.optional,
+    ),
+    maxDepth: Flag.integer("max-depth").pipe(
+      Flag.withDescription("Maximum component-division depth; prompted when omitted"),
+      Flag.withFallbackConfig(Config.int("KTM_MAX_DEPTH")),
+      Flag.optional,
+    ),
   },
-  ({ path, maxHarnessCalls, maxClarifications }) =>
+  ({ path, maxHarnessCalls, maxClarifications, model, variant, maxDepth: maxDepthFlag }) =>
     Effect.gen(function* () {
       const harness = yield* Harness;
       const hermeneut = yield* Hermeneut;
@@ -52,26 +69,37 @@ const analyze = Command.make(
           }),
       );
       const defaults = yield* readHarnessPreferences;
-      const selection = yield* promptHarnessSelection(options, defaults).pipe(
-        Effect.mapError((cause) => new HostFailureError({ message: "prompt cancelled", cause })),
-      );
-      yield* writeHarnessPreferences(selection.preferences);
+      // A scripted run (--model) never touches the saved preferences: those
+      // are the interactive picker's defaults, not a record of every run.
+      const harnessSelection = Option.isSome(model)
+        ? yield* resolveHarnessSelection(options, model.value, variant, defaults)
+        : yield* promptHarnessSelection(options, defaults).pipe(
+            Effect.tap((selection) => writeHarnessPreferences(selection.preferences)),
+            Effect.map((selection) => selection.harness),
+            Effect.mapError(
+              (cause) => new HostFailureError({ message: "prompt cancelled", cause }),
+            ),
+          );
 
       // Interactive like the harness selection above, for the same reason:
       // a division-depth cap the caller can't see or tune per run is a
       // silent tradeoff. Not persisted to .ktm/harness/opencode.json — that
       // file is harness-selection state, not an analysis bound.
-      const maxDepth = yield* Prompt.run(
-        Prompt.integer({
-          message: "Max component-division depth",
-          default: defaultAnalysisBounds.maxDepth,
-          min: 1,
-        }),
-      ).pipe(
-        Effect.mapError((cause) => new HostFailureError({ message: "prompt cancelled", cause })),
-      );
+      const maxDepth = Option.isSome(maxDepthFlag)
+        ? maxDepthFlag.value
+        : yield* Prompt.run(
+            Prompt.integer({
+              message: "Max component-division depth",
+              default: defaultAnalysisBounds.maxDepth,
+              min: 1,
+            }),
+          ).pipe(
+            Effect.mapError(
+              (cause) => new HostFailureError({ message: "prompt cancelled", cause }),
+            ),
+          );
 
-      const artifact = yield* hermeneut.analyze(path, selection.harness, {
+      const artifact = yield* hermeneut.analyze(path, harnessSelection, {
         maxHarnessCalls,
         maxDepth,
         maxClarifications,
