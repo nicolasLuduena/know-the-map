@@ -10,7 +10,7 @@ import {
 } from "@know-the-map/harness";
 import { Duration, Effect, Layer, Schema } from "effect";
 import type { AnalysisBounds, HarnessSelection } from "./hermeneut.ts";
-import { Hermeneut, HermeneutLive } from "./hermeneut.ts";
+import { defaultAnalysisBounds, Hermeneut, HermeneutLive } from "./hermeneut.ts";
 import { AnalysisArtifact } from "./schemas.ts";
 
 const TEST_HARNESS_SELECTION: HarnessSelection = {
@@ -64,17 +64,18 @@ const MockGit: Layer.Layer<Git> = Layer.succeed(
   }),
 );
 
+/** Pops one scripted payload per `send`, in call order, across every session of the run. */
 const scriptHarness = (
   script: ReadonlyArray<unknown>,
   sent: Array<{ prompt: string; payload: unknown }>,
-): Layer.Layer<Harness> =>
-  Layer.succeed(
+): Layer.Layer<Harness> => {
+  const queue = [...script];
+  return Layer.succeed(
     Harness,
     Harness.of({
       listModels: () => Effect.succeed([]),
       start: () =>
         Effect.sync(() => {
-          const queue = [...script];
           const session: HarnessSession = {
             send: <T, I>(exchange: HarnessExchange<T, I>): Effect.Effect<T, HarnessError> =>
               Effect.gen(function* () {
@@ -101,23 +102,91 @@ const scriptHarness = (
         }),
     }),
   );
+};
 
-const runAnalysis = async (script: ReadonlyArray<unknown>, bounds?: AnalysisBounds) => {
-  const sent: Array<{ prompt: string; payload: unknown }> = [];
+/**
+ * Serves a scripted payload per scope, keyed by the component that opened
+ * it ("root" for the root scope), after a per-scope delay, and records the
+ * session lifecycle. The delays let sibling scopes finish in an order
+ * other than the one they were opened in.
+ */
+const keyedHarness = (
+  responses: Readonly<Record<string, { readonly payload: unknown; readonly delayMs: number }>>,
+  sent: Array<{ prompt: string; payload: unknown }>,
+  sessions: { starts: number; closes: number; open: number; peak: number },
+): Layer.Layer<Harness> =>
+  Layer.succeed(
+    Harness,
+    Harness.of({
+      listModels: () => Effect.succeed([]),
+      start: () =>
+        Effect.sync(() => {
+          sessions.starts++;
+          sessions.open++;
+          sessions.peak = Math.max(sessions.peak, sessions.open);
+          const session: HarnessSession = {
+            send: <T, I>(exchange: HarnessExchange<T, I>): Effect.Effect<T, HarnessError> =>
+              Effect.gen(function* () {
+                const key = /component "([^"]+)"/.exec(exchange.prompt)?.[1] ?? "root";
+                const response = responses[key];
+                if (response === undefined) {
+                  return yield* new NoSubmissionError({ message: `no script for "${key}"` });
+                }
+                yield* Effect.sleep(Duration.millis(response.delayMs));
+                sent.push({ prompt: exchange.prompt, payload: response.payload });
+                return yield* Schema.decodeUnknownEffect(exchange.resultSchema)(
+                  response.payload,
+                ).pipe(
+                  Effect.mapError(
+                    (cause) =>
+                      new InvalidResultError({
+                        message: "submit_result payload failed validation",
+                        cause,
+                      }),
+                  ),
+                );
+              }),
+            close: () =>
+              Effect.sync(() => {
+                sessions.closes++;
+                sessions.open--;
+              }),
+          };
+          return session;
+        }),
+    }),
+  );
+
+const analyzeWith = async (harness: Layer.Layer<Harness>, bounds: AnalysisBounds) => {
   const program = Effect.gen(function* () {
     const hermeneut = yield* Hermeneut;
     return yield* hermeneut.analyze(".", TEST_HARNESS_SELECTION, bounds);
-  }).pipe(
-    Effect.provide(
-      HermeneutLive.pipe(Layer.provide(MockGit), Layer.provide(scriptHarness(script, sent))),
-    ),
-  );
-  const outcome = await Effect.runPromise(Effect.result(program)).then((result) =>
+  }).pipe(Effect.provide(HermeneutLive.pipe(Layer.provide(MockGit), Layer.provide(harness))));
+  return Effect.runPromise(Effect.result(program)).then((result) =>
     result._tag === "Success"
       ? { _tag: "Right" as const, right: result.success }
       : { _tag: "Left" as const, left: result.failure },
   );
+};
+
+// The scripted fixtures pop payloads in call order, so they only mean what
+// they say when scopes are explored one at a time.
+const SEQUENTIAL_BOUNDS: AnalysisBounds = { ...defaultAnalysisBounds, maxConcurrency: 1 };
+
+const runAnalysis = async (
+  script: ReadonlyArray<unknown>,
+  bounds: AnalysisBounds = SEQUENTIAL_BOUNDS,
+) => {
+  const sent: Array<{ prompt: string; payload: unknown }> = [];
+  const outcome = await analyzeWith(scriptHarness(script, sent), bounds);
   return { outcome, sent };
+};
+
+const runKeyed = async (responses: Parameters<typeof keyedHarness>[0], bounds: AnalysisBounds) => {
+  const sent: Array<{ prompt: string; payload: unknown }> = [];
+  const sessions = { starts: 0, closes: 0, open: 0, peak: 0 };
+  const outcome = await analyzeWith(keyedHarness(responses, sent, sessions), bounds);
+  return { outcome, sent, sessions };
 };
 
 const interpretation = (
@@ -195,6 +264,10 @@ test("happy path: division then module analyses produce the artifact", async () 
   ]);
   expect(sent).toHaveLength(3);
   expect(sent[0]?.prompt).toContain("src/a.ts");
+  // A child scope learns why it exists; the root has no such context.
+  expect(sent[0]?.prompt).not.toContain('component "');
+  expect(sent[1]?.prompt).toContain('component "alpha"');
+  expect(sent[1]?.prompt).toContain("does a");
 });
 
 test("hallucinated file path triggers a clarification, then the run recovers", async () => {
@@ -370,6 +443,7 @@ test("a custom maxHarnessCalls bound is honored, not just the default", async ()
     maxHarnessCalls: 2,
     maxDepth: 3,
     maxClarifications: 3,
+    maxConcurrency: 1,
   });
 
   expect(outcome._tag).toBe("Right");
@@ -393,6 +467,7 @@ test("a division at the depth bound keeps its own answer and gaps each of its co
     maxHarnessCalls: 48,
     maxDepth: 3,
     maxClarifications: 3,
+    maxConcurrency: 1,
   });
 
   expect(outcome._tag).toBe("Right");
@@ -426,6 +501,7 @@ test("an artifact containing gap scopes still satisfies the artifact schema's in
     maxHarnessCalls: 2,
     maxDepth: 7,
     maxClarifications: 3,
+    maxConcurrency: 1,
   });
 
   expect(outcome._tag).toBe("Right");
@@ -645,7 +721,7 @@ test("a budget spent mid-tree still leaves every component with a child scope", 
       }),
       module(9, "src/a.ts"),
     ],
-    { maxHarnessCalls: 3, maxDepth: 7, maxClarifications: 3 },
+    { maxHarnessCalls: 3, maxDepth: 7, maxClarifications: 3, maxConcurrency: 1 },
   );
 
   expect(outcome._tag).toBe("Right");
@@ -659,4 +735,70 @@ test("a budget spent mid-tree still leaves every component with a child scope", 
   ]);
   const encoded = Schema.encodeSync(AnalysisArtifact)(outcome.right);
   expect(Schema.decodeUnknownSync(AnalysisArtifact)(encoded).scopes).toHaveLength(4);
+});
+
+const SIBLINGS = [
+  { id: 1, name: "alpha", summary: "does a", files: ["src/a.ts"] },
+  { id: 2, name: "beta", summary: "does b", files: ["src/b.ts"] },
+  { id: 3, name: "gamma", summary: "does a again", files: ["src/a.ts"] },
+  { id: 4, name: "delta", summary: "does b again", files: ["src/b.ts"] },
+];
+
+/** Four siblings whose completion order is the reverse of their opening order. */
+const FAN_OUT = {
+  root: {
+    payload: division({ components: SIBLINGS, relationships: [], interpretations: [] }),
+    delayMs: 0,
+  },
+  alpha: { payload: module(10, "src/a.ts"), delayMs: 8 },
+  beta: { payload: module(11, "src/b.ts"), delayMs: 6 },
+  gamma: { payload: module(12, "src/a.ts"), delayMs: 4 },
+  delta: { payload: module(13, "src/b.ts"), delayMs: 2 },
+};
+
+test("each scope gets its own session, siblings run at most maxConcurrency at a time, and the artifact does not depend on completion order", async () => {
+  const concurrent = await runKeyed(FAN_OUT, { ...SEQUENTIAL_BOUNDS, maxConcurrency: 2 });
+  const sequential = await runKeyed(FAN_OUT, SEQUENTIAL_BOUNDS);
+
+  expect(concurrent.outcome._tag).toBe("Right");
+  expect(sequential.outcome._tag).toBe("Right");
+  if (concurrent.outcome._tag !== "Right" || sequential.outcome._tag !== "Right") return;
+  // Root plus one child session per sibling, every one of them closed.
+  expect(concurrent.sessions).toMatchObject({ starts: 5, closes: 5, open: 0, peak: 2 });
+  expect(sequential.sessions).toMatchObject({ starts: 5, closes: 5, open: 0, peak: 1 });
+  const { generatedAt: _c, ...concurrentArtifact } = concurrent.outcome.right;
+  const { generatedAt: _s, ...sequentialArtifact } = sequential.outcome.right;
+  expect(concurrentArtifact).toEqual(sequentialArtifact);
+  const ids = concurrentArtifact.scopes.map((scope) => scope.id);
+  expect(new Set(ids).size).toBe(ids.length);
+  for (const scope of concurrentArtifact.scopes) {
+    if (scope.parentScopeId !== null) {
+      expect(ids.indexOf(scope.parentScopeId)).toBeLessThan(ids.indexOf(scope.id));
+    }
+  }
+});
+
+test("a budget that runs out mid-fan-out gaps only the siblings that got no call", async () => {
+  const { outcome, sent, sessions } = await runKeyed(FAN_OUT, {
+    ...SEQUENTIAL_BOUNDS,
+    maxHarnessCalls: 3,
+    maxConcurrency: 4,
+  });
+
+  expect(outcome._tag).toBe("Right");
+  if (outcome._tag !== "Right") return;
+  expect(sent).toHaveLength(3);
+  // A scope that never gets a call never opens a session either.
+  expect(sessions).toMatchObject({ starts: 3, closes: 3, open: 0 });
+  const kinds = outcome.right.scopes.map((scope) => scope.result.kind);
+  expect(kinds[0]).toBe("division");
+  expect(kinds.filter((kind) => kind === "module")).toHaveLength(2);
+  expect(kinds.filter((kind) => kind === "gap")).toHaveLength(2);
+  expect(
+    outcome.right.scopes.every(
+      (scope) => scope.result.kind !== "gap" || scope.result.reason === "call_budget",
+    ),
+  ).toBe(true);
+  const encoded = Schema.encodeSync(AnalysisArtifact)(outcome.right);
+  expect(Schema.decodeUnknownSync(AnalysisArtifact)(encoded).scopes).toHaveLength(5);
 });

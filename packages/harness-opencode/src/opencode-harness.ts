@@ -60,8 +60,9 @@ const BLOCKED_TOOLS = new Set([
  * - `pending`: in-flight exchanges keyed by session id. Each entry is the
  *   one-shot Deferred waiting for that session's `submit_result` payload.
  * - `systemPrompt`, `maxGenerationTokens`: read live by the context hook on
- *   every generation, set by `start()` per session. The slice runs one
- *   session at a time, so a single Ref each suffices.
+ *   every generation, set by `start()` per session. Several sessions are
+ *   open at once during a run, but every one of them is started with the
+ *   same values, so a single Ref each is still correct.
  */
 interface HostState {
   readonly session: Deferred.Deferred<Plugin.Context["session"], never>;

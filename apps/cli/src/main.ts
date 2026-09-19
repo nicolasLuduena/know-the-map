@@ -37,6 +37,11 @@ const analyze = Command.make(
       Flag.withFallbackConfig(Config.int("KTM_MAX_CLARIFICATIONS")),
       Flag.withDefault(defaultAnalysisBounds.maxClarifications),
     ),
+    maxConcurrency: Flag.integer("max-concurrency").pipe(
+      Flag.withDescription("Maximum sibling components explored at once"),
+      Flag.withFallbackConfig(Config.int("KTM_MAX_CONCURRENCY")),
+      Flag.withDefault(defaultAnalysisBounds.maxConcurrency),
+    ),
     model: Flag.string("model").pipe(
       Flag.withDescription(
         "Skip the interactive picker: provider/model as the picker lists them (e.g. opencode-go/deepseek-v4.1-flash)",
@@ -55,7 +60,15 @@ const analyze = Command.make(
       Flag.optional,
     ),
   },
-  ({ path, maxHarnessCalls, maxClarifications, model, variant, maxDepth: maxDepthFlag }) =>
+  ({
+    path,
+    maxHarnessCalls,
+    maxClarifications,
+    maxConcurrency,
+    model,
+    variant,
+    maxDepth: maxDepthFlag,
+  }) =>
     Effect.gen(function* () {
       const harness = yield* Harness;
       const hermeneut = yield* Hermeneut;
@@ -103,6 +116,7 @@ const analyze = Command.make(
         maxHarnessCalls,
         maxDepth,
         maxClarifications,
+        maxConcurrency,
       });
       yield* Effect.sync(() => mkdirSync(".ktm", { recursive: true }));
       // Encoded through the schema rather than stringified directly, so the

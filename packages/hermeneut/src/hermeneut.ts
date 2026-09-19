@@ -14,7 +14,13 @@ import {
   SYSTEM_PROMPT,
   scopePrompt,
 } from "./prompts.ts";
-import type { AnalysisArtifact, AnalysisScope, FileStatus, ScopeResult } from "./schemas.ts";
+import type {
+  AnalysisArtifact,
+  AnalysisScope,
+  Component,
+  FileStatus,
+  ScopeResult,
+} from "./schemas.ts";
 import { LlmResponse, PositiveInt } from "./schemas.ts";
 import { validateResponse } from "./validation.ts";
 
@@ -24,6 +30,8 @@ export const AnalysisBounds = Schema.Struct({
   maxHarnessCalls: PositiveInt,
   maxDepth: PositiveInt,
   maxClarifications: Schema.Int.pipe(Schema.check(Schema.isGreaterThanOrEqualTo(0))),
+  /** How many sibling components of one division are explored at once. */
+  maxConcurrency: PositiveInt,
 });
 export type AnalysisBounds = Schema.Schema.Type<typeof AnalysisBounds>;
 
@@ -31,6 +39,7 @@ export const defaultAnalysisBounds: AnalysisBounds = {
   maxHarnessCalls: 48,
   maxDepth: 7,
   maxClarifications: 3,
+  maxConcurrency: 4,
 };
 
 /** Which provider/model/variant and turn budget a run's session uses —
@@ -49,6 +58,36 @@ export type AnalyzeError = GitError | HarnessError;
  * of `analyze()`'s public failure contract.
  */
 type ExchangeError = AnalyzeError | AnalysisBoundExceededError;
+
+/**
+ * One visited scope with the subtree it opened, before ids exist. Scopes
+ * are collected per subtree and numbered in one final pre-order pass, so
+ * the artifact is the same whatever order concurrent siblings finish in.
+ */
+interface ScopeNode {
+  readonly originatingComponentId: number | null;
+  readonly inputPaths: ReadonlyArray<string>;
+  readonly result: ScopeResult;
+  readonly children: ReadonlyArray<ScopeNode>;
+}
+
+const flattenScopes = (
+  node: ScopeNode,
+  parentScopeId: number | null,
+  out: Array<AnalysisScope>,
+): void => {
+  const id = out.length + 1;
+  out.push({
+    id,
+    parentScopeId,
+    originatingComponentId: node.originatingComponentId,
+    inputPaths: node.inputPaths,
+    result: node.result,
+  });
+  for (const child of node.children) {
+    flattenScopes(child, id, out);
+  }
+};
 
 /**
  * The deterministic leader of the interpretation process.
@@ -101,31 +140,37 @@ export const HermeneutLive: Layer.Layer<Hermeneut, never, Git | Harness> = Layer
           return count;
         });
 
-      const scopes: Array<AnalysisScope> = [];
-      const referenced = new Set<string>();
-      let nextScopeId = 1;
+      // Plain mutable counter on purpose: the check and the increment below
+      // run in one synchronous stretch, and fibers only interleave at
+      // yields, so two concurrent scopes can never both pass the check on
+      // the budget's last call.
       let calls = 0;
+      const claimCall = Effect.fn("Hermeneut.claimCall")(function* (
+        scopePaths: ReadonlyArray<string>,
+      ): Effect.fn.Return<void, AnalysisBoundExceededError> {
+        if (calls >= bounds.maxHarnessCalls) {
+          // The caller (visit) turns this into a gap scope rather than
+          // failing the run; the sessions already spent are kept.
+          // TODO(ux): offer to resume analysis from the recorded gaps in
+          // a follow-up run, instead of only reporting that they exist.
+          return yield* new AnalysisBoundExceededError({
+            message: `analysis stopped after ${bounds.maxHarnessCalls} model calls`,
+          });
+        }
+        calls++;
+        yield* Effect.logInfo(
+          `analyzing a scope of ${scopePaths.length} file(s) (model call ${calls}/${bounds.maxHarnessCalls})`,
+        );
+      });
 
-      const exchange = Effect.fn("Hermeneut.exchange")(function* (
+      const converse = Effect.fn("Hermeneut.converse")(function* (
         session: HarnessSession,
         scopePaths: ReadonlyArray<string>,
+        originatingComponent: Component | null,
       ): Effect.fn.Return<LlmResponse, ExchangeError> {
-        let prompt = scopePrompt(scopePaths);
+        let prompt = scopePrompt(scopePaths, originatingComponent);
         let clarifications = 0;
         while (true) {
-          if (calls >= bounds.maxHarnessCalls) {
-            // The caller (visit) turns this into a gap scope rather than
-            // failing the run; the sessions already spent are kept.
-            // TODO(ux): offer to resume analysis from the recorded gaps in
-            // a follow-up run, instead of only reporting that they exist.
-            return yield* new AnalysisBoundExceededError({
-              message: `analysis stopped after ${bounds.maxHarnessCalls} model calls`,
-            });
-          }
-          calls++;
-          yield* Effect.logInfo(
-            `analyzing a scope of ${scopePaths.length} file(s) (model call ${calls}/${bounds.maxHarnessCalls})`,
-          );
           const response = yield* session
             .send({
               prompt,
@@ -154,6 +199,7 @@ export const HermeneutLive: Layer.Layer<Hermeneut, never, Git | Harness> = Layer
                 ? response.error.cause.message
                 : response.error.message,
             );
+            yield* claimCall(scopePaths);
             continue;
           }
           yield* Effect.logInfo(
@@ -177,24 +223,42 @@ export const HermeneutLive: Layer.Layer<Hermeneut, never, Git | Harness> = Layer
           }
           clarifications++;
           prompt = clarificationPrompt(issues);
+          yield* claimCall(scopePaths);
         }
       });
 
+      /**
+       * One scope's whole conversation in a session of its own, so no
+       * scope pays for another's transcript. The first call is claimed
+       * before the session opens: a scope the budget cannot cover never
+       * opens one.
+       */
+      const exchange = Effect.fn("Hermeneut.exchange")(function* (
+        scopePaths: ReadonlyArray<string>,
+        originatingComponent: Component | null,
+      ): Effect.fn.Return<LlmResponse, ExchangeError> {
+        yield* claimCall(scopePaths);
+        return yield* Effect.acquireUseRelease(
+          harness.start({
+            directory: repo.root,
+            systemPrompt: SYSTEM_PROMPT,
+            ...harnessSelection,
+          }),
+          (session) => converse(session, scopePaths, originatingComponent),
+          (session) => session.close(),
+        );
+      });
+
       const visit = Effect.fn("Hermeneut.visit")(function* (
-        session: HarnessSession,
         scopePaths: ReadonlyArray<string>,
         depth: number,
-        parentScopeId: number | null,
-        originatingComponentId: number | null,
-      ): Effect.fn.Return<void, AnalyzeError> {
-        for (const path of scopePaths) {
-          referenced.add(path);
-        }
+        originatingComponent: Component | null,
+      ): Effect.fn.Return<ScopeNode, AnalyzeError> {
         // The call budget has already paid for every scope explored so
         // far; running out on this one is a reason to stop here, not to
         // discard everything the run already produced. Recording a gap
         // lets the run return what it has instead of failing outright.
-        const response: ScopeResult = yield* exchange(session, scopePaths).pipe(
+        const result: ScopeResult = yield* exchange(scopePaths, originatingComponent).pipe(
           Effect.catchTag("AnalysisBoundExceededError", (error) =>
             Effect.succeed({
               kind: "gap" as const,
@@ -203,38 +267,21 @@ export const HermeneutLive: Layer.Layer<Hermeneut, never, Git | Harness> = Layer
             }),
           ),
         );
-        const scopeId = nextScopeId++;
-        // Pushed before recursing, so `scopes` ends up in pre-order: a
-        // parent always precedes the children it opened.
-        scopes.push({
-          id: scopeId,
-          parentScopeId,
-          originatingComponentId,
+        const node = (children: ReadonlyArray<ScopeNode>): ScopeNode => ({
+          originatingComponentId: originatingComponent?.id ?? null,
           inputPaths: scopePaths,
-          result: response,
+          result,
+          children,
         });
-        if (response.kind === "gap") {
-          return;
-        }
-        for (const interpretation of response.interpretations) {
-          for (const anchor of interpretation.anchors) {
-            referenced.add(anchor.path);
-          }
-        }
-        if (response.kind === "module") {
-          return;
+        if (result.kind !== "division") {
+          return node([]);
         }
         if (depth >= bounds.maxDepth) {
           // The division itself was already paid for and is worth keeping;
           // only its components go unexplored, each as its own gap, so the
           // "every component has an analyzed child" invariant still holds.
-          for (const component of response.components) {
-            for (const path of component.files) {
-              referenced.add(path);
-            }
-            scopes.push({
-              id: nextScopeId++,
-              parentScopeId: scopeId,
+          return node(
+            result.components.map((component) => ({
               originatingComponentId: component.id,
               inputPaths: component.files,
               result: {
@@ -242,19 +289,37 @@ export const HermeneutLive: Layer.Layer<Hermeneut, never, Git | Harness> = Layer
                 reason: "depth_exceeded",
                 message: `division at depth ${depth} would exceed the max depth of ${bounds.maxDepth}`,
               },
-            });
-          }
-          return;
+              children: [],
+            })),
+          );
         }
-        for (const component of response.components) {
-          yield* visit(session, component.files, depth + 1, scopeId, component.id);
-        }
+        // Siblings fan out; a failure in one still fails the run, as before.
+        const children = yield* Effect.forEach(
+          result.components,
+          (component) => visit(component.files, depth + 1, component),
+          { concurrency: bounds.maxConcurrency },
+        );
+        return node(children);
       });
 
-      const buildFiles = Effect.fn("Hermeneut.buildFiles")(function* (): Effect.fn.Return<
-        ReadonlyArray<FileStatus>,
-        AnalyzeError
-      > {
+      const buildFiles = Effect.fn("Hermeneut.buildFiles")(function* (
+        scopes: ReadonlyArray<AnalysisScope>,
+      ): Effect.fn.Return<ReadonlyArray<FileStatus>, AnalyzeError> {
+        // Every path the artifact mentions: each scope's input (the root's
+        // is the whole inventory) and every anchor an interpretation cites.
+        const referenced = new Set<string>();
+        for (const scope of scopes) {
+          for (const path of scope.inputPaths) {
+            referenced.add(path);
+          }
+          if (scope.result.kind !== "gap") {
+            for (const interpretation of scope.result.interpretations) {
+              for (const anchor of interpretation.anchors) {
+                referenced.add(anchor.path);
+              }
+            }
+          }
+        }
         const files: Array<FileStatus> = [];
         for (const path of [...referenced].sort()) {
           const entry = inventory.get(path);
@@ -272,22 +337,17 @@ export const HermeneutLive: Layer.Layer<Hermeneut, never, Git | Harness> = Layer
         return files;
       });
 
-      return yield* Effect.acquireUseRelease(
-        harness.start({ directory: repo.root, systemPrompt: SYSTEM_PROMPT, ...harnessSelection }),
-        (session) =>
-          Effect.gen(function* () {
-            yield* visit(session, [...inventory.keys()], 0, null, null);
-            const generatedAt = yield* DateTime.now;
-            return {
-              version: 1,
-              headCommit: repo.headCommit,
-              generatedAt,
-              files: yield* buildFiles(),
-              scopes,
-            } satisfies AnalysisArtifact;
-          }),
-        (session) => session.close(),
-      );
+      const root = yield* visit([...inventory.keys()], 0, null);
+      const scopes: Array<AnalysisScope> = [];
+      flattenScopes(root, null, scopes);
+      const generatedAt = yield* DateTime.now;
+      return {
+        version: 1,
+        headCommit: repo.headCommit,
+        generatedAt,
+        files: yield* buildFiles(scopes),
+        scopes,
+      } satisfies AnalysisArtifact;
     });
 
     return Hermeneut.of({ analyze });

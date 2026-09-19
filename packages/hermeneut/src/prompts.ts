@@ -1,3 +1,4 @@
+import type { Component } from "./schemas.ts";
 import type { ClaimIssue } from "./validation.ts";
 
 export const SYSTEM_PROMPT = `You are a structured code-analysis engine.
@@ -51,10 +52,24 @@ Fields:
   otherwise omit "customKind".
 - Every interpretation must cite at least one code anchor.`;
 
-/** One exchange's user prompt: the scope to analyze, as repo paths. */
-export const scopePrompt = (paths: ReadonlyArray<string>): string =>
+/**
+ * One exchange's user prompt: the scope to analyze, as repo paths. A child
+ * scope runs in a fresh session, so the component that opened it is the
+ * only context it gets about why it exists; the root has none.
+ */
+export const scopePrompt = (
+  paths: ReadonlyArray<string>,
+  originatingComponent: Component | null,
+): string =>
   `## Task
-
+${
+  originatingComponent === null
+    ? ""
+    : `
+This scope is the component "${originatingComponent.name}" of a larger
+division, described as: ${originatingComponent.summary}
+`
+}
 Analyze these files of the repository (repo-relative paths):
 
 ${paths.map((path) => `- ${path}`).join("\n")}
