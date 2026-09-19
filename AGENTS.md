@@ -42,3 +42,17 @@ rule; never rely on the framework's unmatched-action default. Reads outside
 the session's own directory go through a distinct action from a normal
 read (e.g. OpenCode's `external_directory`) — check the host's own
 path-resolution source before assuming one rule covers both.
+
+## Agent skills
+
+### Issue tracker
+
+Issues live in GitHub Issues for `nicolasLuduena/know-the-map` (via `gh`). See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+The five canonical triage labels, unchanged: `needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context: `CONTEXT.md` and `docs/adr/` at the repo root. See `docs/agents/domain.md`.
