@@ -1,15 +1,16 @@
-# Know the Map by Bleentr
+# Know the Map
 
-A local-first repository wiki and semantic code-review system. Know the Map connects
-hard code evidence with human and AI interpretations, detects when those
-interpretations drift from the code, and uses the resulting knowledge to make
-changes easier to understand and review.
+A local, private, version-exact index of the code a project depends on. Know
+the Map divides a package at a pinned version into components, records what
+each one does, and anchors every claim to the source lines that support it.
+Agents read the index over MCP and can follow any claim back to the lines
+behind it.
 
 ## Current direction
 
-- [Product plan](./PRODUCT_PLAN.md) — approved product thesis and scope
-- [Review UI options](./docs/design/UI_OPTIONS.md)
-- [Product design context](./PRODUCT.md)
+- The [product plan](./PRODUCT_PLAN.md) is the approved product thesis and scope.
+- The [product design context](./PRODUCT.md) describes the users and design principles.
+- The [review UI options](./docs/design/UI_OPTIONS.md) are deferred.
 
 ## Browse a saved analysis
 

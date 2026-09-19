@@ -1,4 +1,4 @@
-# Know the Map by Bleentr — Product Plan
+# Know the Map product plan
 
 > **Status:** Approved product direction and source of truth for product scope.
 > Architecture and feature documents must be reconciled against this plan when
@@ -6,198 +6,192 @@
 
 ## Product thesis
 
-Know the Map is a **human-first repository and change intelligence system**. Its
-job is to reduce the amount of system state a person must reconstruct when
-reviewing unfamiliar or agent-generated code.
+Know the Map is a **local, private, version-exact index of the code a project
+depends on**. Agents read it over MCP, and every claim carries anchors to the
+source lines that support it.
 
-It does not treat generated prose as code truth. It preserves the relationship
-between what can be observed in code and what humans or AI believe that code
-means.
+DeepWiki is the reference point. It is useful, but it covers public
+repositories only, returns prose, and has no version pinning. Context7 reads
+documentation, so it is only as right as the documentation. Neither works for
+private or internal packages, and neither lets an agent verify a claim against
+the lines behind it.
+
+Know the Map does not treat generated prose as code truth. It preserves the
+relationship between what can be observed in code and what the index believes
+that code means, and it lets the reader check one against the other.
 
 ## Product kernel
 
 The irreducible product is one loop:
 
-1. Capture a reproducible code snapshot.
-2. Recursively identify components until each leaf is a coherent unit that can be
-   explored well.
-3. Gather evidence at every component level, then explore every leaf—or record an
-   explicit coverage gap—for the required detail.
-4. Reconcile duplicate or overlapping components produced by independent agents
-   without losing evidence or coverage.
-5. Record a human or AI interpretation separately from that evidence.
-6. Bind the interpretation to the exact evidence and code scope supporting it.
-7. Detect when the supporting code changes.
-8. Reduce the interpretation's freshness until it is revalidated.
-9. Let a person inspect, correct, dismiss, accept, or supersede it.
+1. Snapshot a directory.
+2. Recursively divide it into components until each leaf is a coherent unit
+   that can be explored well.
+3. Gather evidence with line anchors at every component level, then explore
+   every leaf, or record an explicit coverage gap.
+4. Reconcile duplicate or overlapping components produced by independent
+   sessions without losing evidence or coverage.
+5. Bind each interpretation to the exact evidence and code scope supporting it.
+6. Validate every claim against the files it cites.
 
 ```text
-Code at snapshot A
+Directory at a source hash
   ↓ recursively divide into coherent components
 Component exploration at every level
-  ↓ capture facts across the repository
+  ↓ capture facts with line anchors
 Component reconciliation
   ↓ merge duplicates and preserve shared references
 Evidence
   ↓ explain what those facts mean
 Interpretations bound to evidence
-  ↓ code changes
-Code at snapshot B
-  ↓ compare supporting anchors
-Freshness evaluation
-  ↓
-current · needs review · stale · orphaned
+  ↓ check every claim against the cited lines
+Validated, anchored index
 ```
 
 The central question is:
 
-> What changed since this interpretation was created, and might it no longer
-> hold?
+> What does this package do, and which lines prove it?
 
-If Know the Map can complete this loop reliably, it has a useful first product.
+If Know the Map can complete this loop reliably on a whole package, it has a
+useful first product.
 
 ## Starting point and time
 
-Know the Map begins at a user-selected baseline snapshot. It creates the initial
-evidence and interpretations there, then tracks them forward as new snapshots
-are reviewed.
+Know the Map indexes a dependency at a pinned version. Any directory at a
+source hash qualifies, which covers packages from a public registry, private
+packages, packages internal to a monorepo, and vendored forks.
 
-It does not need to reconstruct a repository commit by commit from its origin.
-Earlier history may be inspected on demand, but it is not a prerequisite for the
-core loop.
+A published version never changes, so freshness collapses to "which version".
+The index does not track a repository forward through time, and it does not
+need earlier history of the package.
+
+The subject of the first slice is the user's dependencies, not the user's own
+repository. Indexing the user's own code over time is the same mechanism applied
+to a different subject and is deferred, not deleted.
 
 ## Product rules
 
 ### Evidence and interpretation remain distinct
 
-Evidence is reproducible repository state: source, symbols, diagnostics, Git
-changes, test results, and other tool output. Interpretations are claims about
-responsibility, behavior, intent, risks, flows, or invariants.
+Evidence is reproducible source state: files, symbols, and line ranges at a
+known hash. Interpretations are claims about responsibility, behavior, intent,
+risks, flows, or invariants.
 
-Human notes may carry more authority than AI inferences, but both can become
-stale when their supporting code changes. Confidence never turns an inference
-into proof.
+Every interpretation cites anchors, and validation rejects a claim that does
+not match the source. Confidence never turns an inference into proof.
 
-### Capabilities are loaded by intent
+### Local and private by default
 
-Component discovery, exploration and deduplication, evidence tracking, interpretation
-binding, and freshness are always active.
-Optional capabilities advertise a compact description and load their prompts,
-tools, context, and tasks only when the user requests them or explicitly enables
-them in a review policy.
-
-A model cannot activate an expensive capability merely because it might produce
-an interesting result. Cached results remain tied to their evidence snapshot and
-do not automatically enable that capability later.
-
-```text
-always active
-  component exploration → deduplication → evidence ↔ interpretation ↔ freshness
-
-available on demand
-  visual map · PR synthesis · Q&A · flow tracing · test gaps · review lenses
-```
-
-### Humans control durable knowledge
-
-Agents propose knowledge; they do not publish truth directly. Important claims
-remain traceable to evidence, uncertain links remain visibly uncertain, and user
-decisions are preserved.
+The index is built and stored on the user's machine. Analysis runs through the
+user's own provider keys. Only the files of the package being indexed are sent
+to the model, and nothing else leaves the machine.
 
 ### Local-first and bounded
 
-Repository access and stored knowledge remain local by default. Only selected
-context is sent to a configured model provider. Filesystem access, tools, token
-budgets, recursion, concurrency, and cancellation are bounded by the application.
+Filesystem access, tools, token budgets, recursion, concurrency, and
+cancellation are bounded by the application. A model cannot widen its own
+scope.
+
+### Sharing is opt-in and later
+
+Sharing analyses is opt-in per package and not part of the first slice. The
+artifact identity in [#58](https://github.com/nicolasLuduena/know-the-map/issues/58)
+must still be designed so that a downloaded artifact for a public dependency
+can replace a local run later.
+
+### Cheap models are the target
+
+Indexing must be affordable enough to run on every dependency a project cares
+about. The smoke test on 2026-09-19 used `opencode-go/deepseek-v4.1-flash` at
+$0.15 per million input tokens and $0.60 per million output tokens, on
+`effect@4.0.0-rc.112` `src/unstable/cli`, 25 files and 672 KB. It took 335
+seconds and 22 calls, with 0 clarification rounds and 0 gaps, and produced 186
+anchored interpretations. The root division matched the package's real
+structure, and 3 of 3 sampled claims were correct when checked against the
+source.
 
 ### The harness is replaceable
 
-OpenCode is the first embedded execution harness. Know the Map owns orchestration,
-schemas, evidence validation, freshness, and publication; OpenCode owns each bounded
-model session, its tools, provider selection, and streaming.
+OpenCode is the first embedded execution harness. Know the Map owns
+orchestration, schemas, evidence validation, and the artifact; OpenCode owns
+each bounded model session, its tools, provider selection, and streaming.
 
 Pi and other harnesses may be added later. A direct model integration would
-turn Know the Map into its own native harness and may enable tighter orchestration,
-but that expansion is outside the MVP.
+turn Know the Map into its own native harness and may enable tighter
+orchestration, but that expansion is outside the MVP.
 
 ## Required MVP
 
 The first product is one narrow end-to-end slice:
 
-1. Open one repository at a reproducible baseline snapshot.
-2. Recursively divide it into components until each leaf is coherent and bounded
-   enough to explore.
-3. Capture evidence belonging to parent components as well as detailed leaf evidence,
-   and account for repository coverage.
-4. Reconcile repeated or overlapping components without discarding their evidence.
-5. Capture code evidence with stable, verifiable anchors.
-6. Create human and AI interpretations bound to that evidence.
-7. Change the code and identify affected interpretations.
-8. Show why their freshness changed.
-9. Let a person confirm, correct, dismiss, or supersede them.
+1. Index one package at one version from its source directory, producing an
+   artifact keyed by package identity.
+2. Serve that artifact over MCP. An agent can find components, read a
+   component with its interpretations, and read the source lines behind an
+   anchor.
+3. Use it daily. Run Claude Code on this repository with `effect` indexed and
+   compare against reading `node_modules/effect` directly.
 
-A recursive component hierarchy is required because it is the exploration strategy.
-A polished component-map UI, chat interface, semantic PR summary, flow analysis,
-test-gap check, model router, or elaborate visualization is not required to validate
+A recursive component hierarchy is required because it is the exploration
+strategy, and a whole library does not fit through one session, which is why
+[#48](https://github.com/nicolasLuduena/know-the-map/issues/48) was the first
+build step. A viewer, chat interface, semantic PR summary, flow analysis,
+test-gap check, model router, or hosted registry is not required to validate
 the loop.
 
-## Candidate capabilities
+## Deferred capabilities
 
-Everything beyond the kernel is optional and demand-loaded. Current candidates
-include:
+Everything beyond the kernel is deferred. Current candidates include:
 
-- rich component maps and browsable briefs beyond the core exploration view;
-- questions answered from progressively loaded repository knowledge;
-- semantic base/head PR review;
-- test protection and core-flow gap analysis;
-- two-stage flow exploration: list flows first, trace only the selected flow;
-- specialized performance, architecture, or security review lenses;
-- stacked-PR feature trajectories and earlier-history exploration;
-- richer Story, Map, and Code views.
+- index your own repository too: human-written interpretations, the viewer,
+  freshness across snapshots, and a person confirming or dismissing
+  interpretations whose supporting code changed;
+- questions answered from progressively loaded package knowledge;
+- specialized performance, architecture, or security review lenses.
 
-Their behavior, activation rules, and prioritization are tracked in
-[GitHub issue #22](https://github.com/nicolasLuduena/know-the-map/issues/22).
-Appearing in that backlog does not make a capability part of the MVP.
+Their prioritization is tracked under
+[#60](https://github.com/nicolasLuduena/know-the-map/issues/60). Appearing
+there does not make a capability part of the MVP.
 
 ## What to validate
 
 Early use should answer:
 
-- Can evidence anchors be reproduced and verified reliably?
-- Do interpretations remain understandable when separated from evidence?
-- Does freshness correctly identify knowledge that may no longer hold?
-- Can a user understand why an interpretation lost freshness?
-- Are user corrections preserved and given appropriate authority?
-- Does the core loop improve understanding enough to justify its analysis cost?
-- Which optional capability is actually needed next?
+- Does a cheap model index a full package, not a subpackage, within an
+  acceptable cost and time?
+- Does an agent with the server attached use less context on a real task than
+  one without?
+- Does anchored evidence get used? That is, does the agent call `read_anchor`,
+  and does it catch a wrong claim when one exists?
 
 ## Non-goals for the first slice
 
-- AI approving code or replacing the human reviewer.
-- Reconstructing the repository from its first commit.
-- Sending the entire repository to a model by default.
-- Running optional analyses without explicit activation.
-- Supporting every language or coding harness.
-- Building a replacement IDE.
-- Treating generated prose or model confidence as proof.
-- Implementing a full native agent runtime.
+- A hosted registry or any sharing of artifacts.
+- Human-written interpretations, the viewer, and freshness across snapshots.
+- Indexing every dependency automatically. The user names the package.
+- Letting a model orchestrate the split.
 
 ## Product framing
 
 Know the Map should not optimize for the number of AI features it can run.
 
-> **Optimize for preserving the relationship between code evidence and human
-> understanding as the code changes.**
+> **Optimize for giving an agent a verifiable answer about a dependency at the
+> exact version the project uses.**
 
 That is the source-of-truth principle for product and architecture decisions.
 
 ## Naming
 
-- Product: **Know the Map by Bleentr**
+- Product: **Know the Map**
 - Short name: **Know the Map**
 - Binary and command prefix: `ktm`
 
 ## Document map
 
-- [Optional capability backlog](https://github.com/nicolasLuduena/know-the-map/issues/22)
+- [Artifact identity by package](https://github.com/nicolasLuduena/know-the-map/issues/58)
+- [Serve an artifact over MCP](https://github.com/nicolasLuduena/know-the-map/issues/59)
+- [Backlog re-triage](https://github.com/nicolasLuduena/know-the-map/issues/60)
+
+### Deferred
+
 - [Review UI options](./docs/design/UI_OPTIONS.md)
