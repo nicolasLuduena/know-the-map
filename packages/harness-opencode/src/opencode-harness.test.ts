@@ -2,8 +2,8 @@ import { expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Duration, Effect, Exit, Layer, Scope } from "effect";
 import { Harness } from "@know-the-map/harness";
+import { Duration, Effect, Exit, Layer, Scope } from "effect";
 import { OpencodeHarnessLive } from "./opencode-harness.ts";
 
 const withAuthHome = async (
