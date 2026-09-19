@@ -6,7 +6,7 @@ import {
   type HarnessSessionConfig,
   InvalidResultError,
 } from "@know-the-map/harness";
-import { Context, DateTime, Effect, Layer, Schema } from "effect";
+import { Context, DateTime, Effect, Layer, Ref, Schema, Semaphore } from "effect";
 import { AnalysisBoundExceededError } from "./errors.ts";
 import {
   clarificationPrompt,
@@ -30,8 +30,9 @@ export const AnalysisBounds = Schema.Struct({
   maxHarnessCalls: PositiveInt,
   maxDepth: PositiveInt,
   maxClarifications: Schema.Int.pipe(Schema.check(Schema.isGreaterThanOrEqualTo(0))),
-  /** How many sibling components of one division are explored at once. */
-  maxConcurrency: PositiveInt,
+  maxConcurrency: PositiveInt.annotate({
+    description: "How many scopes may hold an open model session at once, across the whole run",
+  }),
 });
 export type AnalysisBounds = Schema.Schema.Type<typeof AnalysisBounds>;
 
@@ -140,15 +141,20 @@ export const HermeneutLive: Layer.Layer<Hermeneut, never, Git | Harness> = Layer
           return count;
         });
 
-      // Plain mutable counter on purpose: the check and the increment below
-      // run in one synchronous stretch, and fibers only interleave at
-      // yields, so two concurrent scopes can never both pass the check on
-      // the budget's last call.
-      let calls = 0;
+      const calls = yield* Ref.make(0);
+      // One global bound on open sessions, not one per division: nested
+      // fan-outs would otherwise multiply into maxConcurrency^depth.
+      const sessions = yield* Semaphore.make(bounds.maxConcurrency);
+
       const claimCall = Effect.fn("Hermeneut.claimCall")(function* (
         scopePaths: ReadonlyArray<string>,
       ): Effect.fn.Return<void, AnalysisBoundExceededError> {
-        if (calls >= bounds.maxHarnessCalls) {
+        // Check and increment in one modify, so concurrent scopes can never
+        // both pass the check on the budget's last call.
+        const call = yield* Ref.modify(calls, (spent) =>
+          spent >= bounds.maxHarnessCalls ? [null, spent] : [spent + 1, spent + 1],
+        );
+        if (call === null) {
           // The caller (visit) turns this into a gap scope rather than
           // failing the run; the sessions already spent are kept.
           // TODO(ux): offer to resume analysis from the recorded gaps in
@@ -157,9 +163,8 @@ export const HermeneutLive: Layer.Layer<Hermeneut, never, Git | Harness> = Layer
             message: `analysis stopped after ${bounds.maxHarnessCalls} model calls`,
           });
         }
-        calls++;
         yield* Effect.logInfo(
-          `analyzing a scope of ${scopePaths.length} file(s) (model call ${calls}/${bounds.maxHarnessCalls})`,
+          `analyzing a scope of ${scopePaths.length} file(s) (model call ${call}/${bounds.maxHarnessCalls})`,
         );
       });
 
@@ -247,7 +252,7 @@ export const HermeneutLive: Layer.Layer<Hermeneut, never, Git | Harness> = Layer
           (session) => converse(session, scopePaths, originatingComponent),
           (session) => session.close(),
         );
-      });
+      }, sessions.withPermits(1));
 
       const visit = Effect.fn("Hermeneut.visit")(function* (
         scopePaths: ReadonlyArray<string>,
@@ -293,11 +298,12 @@ export const HermeneutLive: Layer.Layer<Hermeneut, never, Git | Harness> = Layer
             })),
           );
         }
-        // Siblings fan out; a failure in one still fails the run, as before.
+        // Siblings fan out and queue on the session semaphore; a failure in
+        // one still fails the run, as before.
         const children = yield* Effect.forEach(
           result.components,
           (component) => visit(component.files, depth + 1, component),
-          { concurrency: bounds.maxConcurrency },
+          { concurrency: "unbounded" },
         );
         return node(children);
       });

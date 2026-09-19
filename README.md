@@ -29,10 +29,10 @@ as the picker lists them, and every flag also reads a `KTM_*` variable:
 bun run ktm analyze . --model opencode-go/deepseek-v4.1-flash --variant low --max-depth 5
 ```
 
-Each scope is analyzed in a model session of its own, and sibling components
-are explored concurrently — up to `--max-concurrency` (default 4,
-`KTM_MAX_CONCURRENCY`) at a time. `--max-harness-calls` remains an exact
-budget across all of them.
+Each scope is analyzed in a model session of its own, and components are
+explored concurrently — at most `--max-concurrency` (default 4,
+`KTM_MAX_CONCURRENCY`) open sessions at a time across the whole run.
+`--max-harness-calls` remains an exact budget across all of them.
 
 `view` prints a `http://127.0.0.1:…/` address. The server binds an available
 port unless `--port 4321` names one, and stops on Ctrl+C.

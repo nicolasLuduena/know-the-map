@@ -802,3 +802,43 @@ test("a budget that runs out mid-fan-out gaps only the siblings that got no call
   const encoded = Schema.encodeSync(AnalysisArtifact)(outcome.right);
   expect(Schema.decodeUnknownSync(AnalysisArtifact)(encoded).scopes).toHaveLength(5);
 });
+
+test("the concurrency bound holds across nested divisions, not just within one", async () => {
+  const branch = (base: number, prefix: string, path: string) => ({
+    payload: division({
+      components: [
+        { id: base, name: `${prefix}1`, summary: "leaf", files: [path] },
+        { id: base + 1, name: `${prefix}2`, summary: "leaf", files: [path] },
+      ],
+      relationships: [],
+      interpretations: [],
+    }),
+    delayMs: 2,
+  });
+  const leaf = (id: number, path: string) => ({ payload: module(id, path), delayMs: 6 });
+  const { outcome, sessions } = await runKeyed(
+    {
+      root: {
+        payload: division({
+          components: SIBLINGS.slice(0, 2),
+          relationships: [],
+          interpretations: [],
+        }),
+        delayMs: 0,
+      },
+      alpha: branch(10, "a", "src/a.ts"),
+      beta: branch(20, "b", "src/b.ts"),
+      a1: leaf(30, "src/a.ts"),
+      a2: leaf(31, "src/a.ts"),
+      b1: leaf(32, "src/b.ts"),
+      b2: leaf(33, "src/b.ts"),
+    },
+    { ...SEQUENTIAL_BOUNDS, maxConcurrency: 2 },
+  );
+
+  expect(outcome._tag).toBe("Right");
+  if (outcome._tag !== "Right") return;
+  // Four leaves are ready at once; a per-division bound would let all four run.
+  expect(sessions).toMatchObject({ starts: 7, closes: 7, open: 0, peak: 2 });
+  expect(outcome.right.scopes).toHaveLength(7);
+});
