@@ -21,6 +21,14 @@ bun run ktm analyze .
 bun run ktm view .
 ```
 
+`analyze` asks for a provider, model, and division depth. To run it without
+prompts (scripts, CI), pass them as flags; `--model` takes `provider/model`
+as the picker lists them, and every flag also reads a `KTM_*` variable:
+
+```sh
+bun run ktm analyze . --model opencode-go/deepseek-v4.1-flash --variant low --max-depth 5
+```
+
 `view` prints a `http://127.0.0.1:…/` address. The server binds an available
 port unless `--port 4321` names one, and stops on Ctrl+C.
 

@@ -1,4 +1,4 @@
-import type { HarnessModelOption } from "@know-the-map/harness";
+import { guard, type HarnessModelOption, HostFailureError } from "@know-the-map/harness";
 import type { HarnessSelection } from "@know-the-map/hermeneut";
 import { Console, Duration, Effect, Option, type Terminal } from "effect";
 import { Prompt } from "effect/unstable/cli";
@@ -109,5 +109,50 @@ export const promptHarnessSelection = (
         maxGenerationTokens,
       },
       preferences,
+    };
+  });
+
+/**
+ * The scripted counterpart of `promptHarnessSelection`: `provider/model`
+ * (split at the first slash, since model ids may themselves contain one)
+ * plus an optional variant, checked against the live catalog. Turn timeout
+ * and generation cap come from the saved preferences when present, else the
+ * same defaults the prompts start from.
+ */
+export const resolveHarnessSelection = (
+  options: ReadonlyArray<HarnessModelOption>,
+  modelRef: string,
+  variantId: Option.Option<string>,
+  defaults: Option.Option<HarnessPreferences>,
+): Effect.Effect<HarnessSelection, HostFailureError> =>
+  Effect.gen(function* () {
+    const slash = modelRef.indexOf("/");
+    yield* guard(
+      slash > 0 && slash < modelRef.length - 1,
+      () => new HostFailureError({ message: `--model must be provider/model, got "${modelRef}"` }),
+    );
+    const providerId = modelRef.slice(0, slash);
+    const modelId = modelRef.slice(slash + 1);
+    const model = options.find(
+      (option) => option.providerId === providerId && option.modelId === modelId,
+    );
+    if (model === undefined) {
+      return yield* new HostFailureError({
+        message: `no usable model "${modelRef}" — run \`ktm analyze\` without --model to see the catalog`,
+      });
+    }
+    const variant = Option.getOrUndefined(variantId);
+    yield* guard(
+      variant === undefined || model.variants.includes(variant),
+      () =>
+        new HostFailureError({
+          message: `model "${modelRef}" has no variant "${variant}"; available: ${model.variants.join(", ") || "none"}`,
+        }),
+    );
+    const previous = Option.getOrUndefined(defaults);
+    return {
+      model: { providerId, modelId, variantId: variant },
+      turnTimeout: previous?.turnTimeout ?? Duration.minutes(DEFAULT_TURN_TIMEOUT_MINUTES),
+      maxGenerationTokens: previous?.maxGenerationTokens ?? DEFAULT_MAX_GENERATION_TOKENS,
     };
   });
