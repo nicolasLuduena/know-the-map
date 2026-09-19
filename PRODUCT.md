@@ -6,26 +6,26 @@ product
 
 ## Users
 
-Know the Map is for capable engineers and technical leads reviewing complex,
-unfamiliar, stacked, or agent-generated changes. They are usually working under
-time pressure and need to reconstruct enough of a system to make a responsible
-approval decision without reading the repository from scratch.
+The primary consumer of Know the Map is an agent working in a codebase that
+depends on the indexed package. It reads the index over MCP while doing a real
+task, asks what a component does, and follows a claim to the exact source lines
+when it needs proof. It has a limited context window and no time to read the
+package from scratch.
 
-Their primary tasks are to understand how a repository is organized, determine
-what a change means beyond its textual diff, check whether established
-assumptions still hold, follow important claims back to code, and record durable
-human knowledge for the next review.
+The secondary user is the engineer who configures and reviews the index. They
+name the package and version to index, choose the provider and model, check the
+cost and coverage of a run, and spot-check claims against the source.
 
 ## Product Purpose
 
-Know the Map is a local-first repository wiki and semantic review workspace. It
-connects exact code evidence with human and AI interpretations, detects when
-those interpretations drift from the code, and uses the resulting knowledge to
-explain a change as a transition between two understood system states.
+Know the Map is a local, private, version-exact index of the code a project
+depends on. It divides a package into components, binds every interpretation to
+the evidence that supports it, validates each claim against the files, and
+serves the result to agents over MCP.
 
-The product succeeds when a reviewer spends less time reconstructing system
-state, can distinguish evidence from inference, and knows what must be verified
-before approving a change.
+The product succeeds when an agent with the index attached uses less context on
+a real task than one without, can distinguish evidence from inference, and
+catches a wrong claim by reading the lines behind it.
 
 ## Brand Personality
 
