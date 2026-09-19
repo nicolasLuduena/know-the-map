@@ -2,7 +2,8 @@ import { expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Effect, Exit, Layer, Scope } from "effect";
+import { Harness } from "@know-the-map/harness";
+import { Duration, Effect, Exit, Layer, Scope } from "effect";
 import { OpencodeHarnessLive } from "./opencode-harness.ts";
 
 const withAuthHome = async (
@@ -59,4 +60,32 @@ test("OpencodeHarnessLive injects every usable provider's key for the layer's li
       expect(process.env["OPENROUTER_API_KEY"]).toBe(previousOpenrouterKey);
     },
   );
+});
+
+test("Harness.start accepts a model selection with no variant", async () => {
+  await withAuthHome({ "opencode-go": { type: "api", key: "test-opencode-go-key" } }, async () => {
+    const directory = mkdtempSync(join(tmpdir(), "ktm-opencode-harness-session-"));
+    try {
+      // Regression: `Model.Ref` rejects a present-but-undefined `variant`,
+      // so a selection without one used to fail with a SchemaError before
+      // any session was created.
+      const session = await Effect.runPromise(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const harness = yield* Harness;
+            return yield* harness.start({
+              directory,
+              systemPrompt: "test",
+              model: { providerId: "opencode-go", modelId: "deepseek-v4.1-flash" },
+              turnTimeout: Duration.minutes(1),
+              maxGenerationTokens: 1024,
+            });
+          }).pipe(Effect.provide(OpencodeHarnessLive)),
+        ),
+      );
+      expect(typeof session.send).toBe("function");
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
 });

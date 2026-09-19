@@ -340,10 +340,13 @@ export const OpencodeHarnessLive: Layer.Layer<Harness, HostFailureError> = Layer
       yield* Ref.set(state.systemPrompt, sessionConfig.systemPrompt);
       yield* Ref.set(state.maxGenerationTokens, sessionConfig.maxGenerationTokens);
 
+      // `Model.Ref` treats a present-but-undefined `variant` as a type
+      // error, so the key must be omitted rather than set to undefined.
+      const { variantId } = sessionConfig.model;
       const model = Schema.decodeSync(Model.Ref)({
         id: sessionConfig.model.modelId,
         providerID: sessionConfig.model.providerId,
-        variant: sessionConfig.model.variantId,
+        ...(variantId === undefined ? {} : { variant: variantId }),
       });
 
       const created = yield* pluginSession
