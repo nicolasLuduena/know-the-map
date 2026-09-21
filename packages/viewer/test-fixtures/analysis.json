@@ -1,6 +1,13 @@
 {
-  "version": 1,
-  "headCommit": "6caff882889e7f9bfcabec04cc0b2025f1104acc",
+  "version": 2,
+  "identity": {
+    "repository": "https://github.com/nicolasLuduena/know-the-map.git",
+    "commit": "6caff882889e7f9bfcabec04cc0b2025f1104acc",
+    "name": "know-the-map"
+  },
+  "packageVersion": "0.0.0",
+  "scope": ".",
+  "workspaceDependencies": [],
   "generatedAt": "2026-09-06T17:15:32.000Z",
   "files": [
     {

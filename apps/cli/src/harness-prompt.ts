@@ -138,7 +138,7 @@ export const resolveHarnessSelection = (
     );
     if (model === undefined) {
       return yield* new HostFailureError({
-        message: `no usable model "${modelRef}" — run \`ktm analyze\` without --model to see the catalog`,
+        message: `no usable model "${modelRef}" — run \`ktm index\` without --model to see the catalog`,
       });
     }
     const variant = Option.getOrUndefined(variantId);

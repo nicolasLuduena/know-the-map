@@ -5,3 +5,8 @@ export class AnalysisBoundExceededError extends Schema.TaggedError<AnalysisBound
   "AnalysisBoundExceededError",
   { message: Schema.String },
 ) {}
+
+/** Raised when the directory to analyze holds no files in the checkout. */
+export class EmptyScopeError extends Schema.TaggedError<EmptyScopeError>()("EmptyScopeError", {
+  message: Schema.String,
+}) {}

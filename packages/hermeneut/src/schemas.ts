@@ -1,3 +1,4 @@
+import { HexObjectId, RepoRelativePath } from "@know-the-map/git";
 import { Schema } from "effect";
 
 export const PositiveInt = Schema.Int.pipe(Schema.check(Schema.isGreaterThan(0)));
@@ -285,36 +286,73 @@ export const ModuleResult = ModuleBase.check(
 );
 export type ModuleResult = Schema.Schema.Type<typeof ModuleResult>;
 
-export const LlmResponse = Schema.Union([DivisionResult, ModuleResult]);
-export type LlmResponse = Schema.Schema.Type<typeof LlmResponse>;
-
-export const GapReason = Schema.Union([
+/** Reasons only the runner records: a bound it hit, a package it skipped. */
+const RunnerGapReason = Schema.Union([
   Schema.Literal("depth_exceeded").annotate({
     description: "The scope's parent division reached the run's maximum division depth.",
   }),
   Schema.Literal("call_budget").annotate({
     description: "The run exhausted its model-call budget before this scope could be explored.",
   }),
+  Schema.Literal("workspace_dependency_not_indexed").annotate({
+    description:
+      "A workspace dependency exists at this commit but was not indexed: the package bound was reached, or the user declined.",
+  }),
 ]);
+
+const OpaqueSourceReason = Schema.Literal("opaque_source").annotate({
+  description:
+    "The scope's behavior is implemented outside the files it was given: a wasm import, a generated-code header, an FFI boundary.",
+});
+
+export const GapReason = Schema.Union([...RunnerGapReason.members, OpaqueSourceReason]);
 export type GapReason = Schema.Schema.Type<typeof GapReason>;
 
-/**
- * The runner, never the model, produces this: a scope a bound stopped it
- * from exploring. It carries no interpretations or components — there was
- * no answer — but it still occupies the child-scope slot a component
- * opened, so the "every component has an analyzed child" invariant stays
- * satisfiable even when a run is cut short.
- */
-export const GapResult = Schema.Struct({
+const gapBase = {
   kind: Schema.Literal("gap").annotate({
-    description: "Discriminator: the run did not explore this scope.",
+    description: "Discriminator: this scope was not explored.",
   }),
-  reason: GapReason.annotate({ description: "Why this scope was left unexplored." }),
   message: Schema.String.annotate({
-    description: "Detail about the bound that stopped exploration.",
+    description: "Detail about why exploration stopped.",
+  }),
+};
+
+/**
+ * The one gap the model may report itself: it read the scope and found its
+ * behavior lives elsewhere. `sourceHint` points outside the scope by design,
+ * so nothing here checks it against the scope's inventory.
+ */
+export const OpaqueSourceGap = Schema.Struct({
+  ...gapBase,
+  reason: OpaqueSourceReason,
+  sourceHint: Schema.optionalKey(Schema.String).annotate({
+    description:
+      "Repository-relative path believed to hold the real source, when one was visible; omit otherwise.",
   }),
 });
+export type OpaqueSourceGap = Schema.Schema.Type<typeof OpaqueSourceGap>;
+
+/**
+ * A scope that was not explored: a bound stopped the runner, or the model
+ * found the source opaque. It carries no interpretations or components —
+ * there was no answer — but it still occupies the child-scope slot a
+ * component opened, so the "every component has an analyzed child"
+ * invariant stays satisfiable even when a run is cut short. The two
+ * variants encode that only `opaque_source` may carry a `sourceHint`.
+ */
+export const GapResult = Schema.Union([
+  Schema.Struct({
+    ...gapBase,
+    reason: RunnerGapReason.annotate({ description: "Why the runner left this scope unexplored." }),
+    sourceHint: Schema.optionalKey(Schema.Never),
+  }),
+  OpaqueSourceGap,
+]);
 export type GapResult = Schema.Schema.Type<typeof GapResult>;
+
+/** What the model may answer for one scope. */
+export const LlmResponse = Schema.Union([DivisionResult, ModuleResult, OpaqueSourceGap]);
+export type LlmResponse = Schema.Schema.Type<typeof LlmResponse>;
 
 /** Everything an `AnalysisScope` may store: what the model answered, or a
  * gap the runner recorded in its place. */
@@ -327,7 +365,7 @@ export const FileStatus = Schema.Struct({
     description: "Repo-relative file path.",
   }),
   hash: Schema.String.annotate({
-    description: "Git blob hash of the file at headCommit.",
+    description: "Git blob hash of the file at the identity's commit.",
   }),
   lineCount: Schema.Int.annotate({
     description: "Number of lines in the file; lets anchors be rechecked without git access.",
@@ -373,6 +411,36 @@ export const componentKey = (scopeId: number, componentId: number): string =>
   `${scopeId}:${componentId}`;
 
 /**
+ * What makes two artifacts the same: one package, from one repository, at
+ * one commit. A tag or version is only how the commit was found, never the
+ * identity itself.
+ */
+export const ArtifactIdentity = Schema.Struct({
+  repository: Schema.NonEmptyString.annotate({
+    description:
+      "Clone URL of the source repository, as declared; see repositoryKey for the store key.",
+  }),
+  commit: HexObjectId.annotate({
+    description: "Full hash of the commit the analysis ran at.",
+  }),
+  name: Schema.NonEmptyString.annotate({
+    description:
+      "Package name as the ecosystem knows it; in a monorepo, the one workspace package analyzed.",
+  }),
+});
+export type ArtifactIdentity = Schema.Schema.Type<typeof ArtifactIdentity>;
+
+export const WorkspaceDependency = Schema.Struct({
+  name: Schema.NonEmptyString.annotate({
+    description: "Name of a workspace package this package depends on at the same commit.",
+  }),
+  indexed: Schema.Boolean.annotate({
+    description: "Whether the store holds that package's own artifact at this commit.",
+  }),
+});
+export type WorkspaceDependency = Schema.Schema.Type<typeof WorkspaceDependency>;
+
+/**
  * Structural shape of a saved analysis, without the cross-field checks that
  * `AnalysisArtifact` adds. Decode with this only where the value already
  * passed `AnalysisArtifact` at a trust boundary: the checks below walk the
@@ -380,9 +448,17 @@ export const componentKey = (scopeId: number, componentId: number): string =>
  * nothing.
  */
 export const AnalysisArtifactShape = Schema.Struct({
-  version: Schema.Literal(1).annotate({ description: "Analysis artifact format version." }),
-  headCommit: Schema.String.annotate({
-    description: "Git commit hash the analysis was made against.",
+  version: Schema.Literal(2).annotate({ description: "Analysis artifact format version." }),
+  identity: ArtifactIdentity.annotate({ description: "What this artifact is an analysis of." }),
+  packageVersion: Schema.NonEmptyString.annotate({
+    description: "Version string that led to the identity's commit.",
+  }),
+  scope: Schema.Union([Schema.Literal("."), RepoRelativePath]).annotate({
+    description:
+      'Repository-relative directory that was analyzed; "." for a single-package repository.',
+  }),
+  workspaceDependencies: Schema.Array(WorkspaceDependency).annotate({
+    description: "Other workspace packages this package depends on at the same commit.",
   }),
   generatedAt: Schema.DateTimeUtcFromString.annotate({
     description: "UTC instant the artifact was generated.",
