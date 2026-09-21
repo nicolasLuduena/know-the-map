@@ -160,7 +160,7 @@ const EMPTY_STDIN = new Uint8Array();
 /** Matches a full sha1 (40 hex chars) or sha256 (64 hex chars) git object id. */
 const HEX_OBJECT_ID = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
 
-const HexObjectId = Schema.String.pipe(
+export const HexObjectId = Schema.String.pipe(
   Schema.check(
     Schema.isPattern(HEX_OBJECT_ID, {
       description: "a full 40-character sha1 or 64-character sha256 hex object id",
@@ -168,7 +168,7 @@ const HexObjectId = Schema.String.pipe(
   ),
 );
 
-const RepoRelativePath = Schema.String.pipe(
+export const RepoRelativePath = Schema.String.pipe(
   Schema.check(
     Schema.makeFilter((path: string) => {
       if (path.length === 0) {

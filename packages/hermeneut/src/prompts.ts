@@ -1,5 +1,5 @@
 import type { Component } from "./schemas.ts";
-import type { ClaimIssue } from "./validation.ts";
+import { type ClaimIssue, describeIssue } from "./validation.ts";
 
 export const SYSTEM_PROMPT = `You are a structured code-analysis engine.
 
@@ -14,8 +14,8 @@ What counts as evidence:
   how something looks. If such files force a division, group them into one
   minimal collateral component.
 - Ignore build and tooling output entirely: node_modules, .git, dist and
-  other generated/transpiled directories, and any .ktm directory. Never
-  read or interpret files from them.
+  other generated/transpiled directories. Never read or interpret files
+  from them.
 
 Scope and honesty:
 - Only read files from the task's file list. When clarifying, you may open
@@ -34,13 +34,20 @@ Ids and anchors:
 Be concise: a "summary" or "description" is one or two plain sentences.
 An interpretation's "text" is a single sentence stating the claim.
 
-Answer with exactly one of two shapes:
+Answer with exactly one of three shapes:
 
 1. DIVISION — the scope contains several meaningful components:
 {"kind":"division","components":[{"id":1,"name":"...","summary":"...","files":["..."]}],"relationships":[{"id":2,"from":"...","to":"...","kind":"uses","description":"..."}],"interpretations":[{"id":3,"kind":"invariant","text":"...","anchors":[{"path":"...","lineStart":1,"lineEnd":2}]}]}
 
 2. MODULE — the scope is one module of code:
 {"kind":"module","summary":"...","interpretations":[{"id":4,"kind":"role","text":"...","anchors":[{"path":"...","lineStart":1,"lineEnd":2}]}]}
+
+3. OPAQUE — the scope's behavior is implemented outside the files you were
+given (a wasm import, a generated-code header, an FFI boundary, bindings
+whose logic lives elsewhere). Do not guess at behavior you cannot read:
+{"kind":"gap","reason":"opaque_source","message":"...","sourceHint":"path/to/real/source"}
+"message" says what is opaque and why. "sourceHint" is the repo-relative
+path you believe holds the real source; omit it when none was visible.
 
 Fields:
 - A component lists the repo-relative files that make it up. Relationship
@@ -85,15 +92,16 @@ export const clarificationPrompt = (issues: ReadonlyArray<ClaimIssue>): string =
 Your previous submit_result was rejected. Fix every issue below and resubmit
 the COMPLETE corrected answer via submit_result, same contract as before:
 
-${issues.map((issue) => `- claim ${issue.id} (${issue.claim}): ${issue.reason}`).join("\n")}`;
+${issues.map((issue) => `- ${describeIssue(issue)}`).join("\n")}`;
 
 export const contractClarificationPrompt = (reason: string): string =>
   `## Clarification required
 
 Your previous submit_result payload did not match the required answer
 contract, so it could not be read at all. Resubmit the COMPLETE answer via
-submit_result, obeying the two-shape contract from your instructions exactly
-(no extra top-level fields, correct field names, integer ids unique within
-this answer, valid line anchors):
+submit_result, obeying the three-shape contract from your instructions
+exactly (division, module, or opaque_source gap; no extra top-level fields,
+correct field names, integer ids unique within this answer, valid line
+anchors):
 
 ${reason}`;

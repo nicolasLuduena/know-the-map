@@ -1,4 +1,4 @@
-import type { AnalysisScope, Interpretation } from "@know-the-map/hermeneut";
+import type { AnalysisScope, GapReason, Interpretation } from "@know-the-map/hermeneut";
 import { Cause, DateTime, Effect, Layer } from "effect";
 import { RpcClient, RpcSerialization } from "effect/unstable/rpc";
 import { Socket } from "effect/unstable/socket";
@@ -283,6 +283,15 @@ const formatGeneratedAt = (at: DateTime.Utc): string =>
     .replace("T", " ")
     .replace(/:\d\d(\.\d+)?Z$/, "")} UTC`;
 
+const GAP_EXPLANATIONS: Record<GapReason, string> = {
+  call_budget: "The run stopped before reaching this part because it ran out of model calls.",
+  depth_exceeded:
+    "The run stopped before reaching this part because it hit the division-depth limit.",
+  opaque_source: "This part's behavior is implemented outside the files that were analyzed.",
+  workspace_dependency_not_indexed:
+    "This part is a workspace dependency that was not indexed in this run.",
+};
+
 const kindOf = (interpretation: Interpretation): string =>
   interpretation.kind === "other" ? interpretation.customKind : interpretation.kind;
 
@@ -454,12 +463,7 @@ const ScopeView = ({ scope, node, repositoryName, onSelect, onOpenSource }: Scop
       {result.kind === "gap" && (
         <section className="region unexplored" aria-labelledby="unexplored-heading">
           <h2 id="unexplored-heading">Never explored</h2>
-          <p>
-            The run stopped before reaching this part
-            {result.reason === "call_budget"
-              ? " because it ran out of model calls."
-              : " because it hit the division-depth limit."}
-          </p>
+          <p>{GAP_EXPLANATIONS[result.reason]}</p>
           <p className="detail">{result.message}</p>
         </section>
       )}
@@ -638,7 +642,7 @@ const Workspace = ({ snapshot }: { readonly snapshot: ViewerSnapshot }) => {
           <div>
             <strong>{snapshot.repositoryName}</strong>
             <span className="revision">
-              <code>{snapshot.artifact.headCommit.slice(0, 12)}</code>
+              <code>{snapshot.artifact.identity.commit.slice(0, 12)}</code>
               <time dateTime={DateTime.formatIso(snapshot.artifact.generatedAt)}>
                 {formatGeneratedAt(snapshot.artifact.generatedAt)}
               </time>
@@ -719,7 +723,7 @@ const Workspace = ({ snapshot }: { readonly snapshot: ViewerSnapshot }) => {
         <SourcePane
           path={pane.path}
           range={pane.range}
-          headCommit={snapshot.artifact.headCommit}
+          headCommit={snapshot.artifact.identity.commit}
           onClose={closeSource}
         />
       )}
@@ -749,7 +753,7 @@ class Boundary extends Component<{ readonly children: ReactNode }, BoundaryState
       <main className="notice">
         <h1>This analysis could not be read</h1>
         <p className="detail">{this.state.message}</p>
-        <p className="detail">Regenerate it with `ktm analyze`.</p>
+        <p className="detail">Regenerate it with `ktm index`.</p>
       </main>
     );
   }
