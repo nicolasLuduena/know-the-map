@@ -7,8 +7,9 @@ import { ArtifactNotFoundError, StoreIndexError, StoreIoError } from "./errors.t
 import { repositoryKey } from "./repository-key.ts";
 
 /**
- * Where everything lives: a flag when the CLI passes one, then `KTM_HOME`,
- * then `$XDG_DATA_HOME/ktm`, then `~/.local/share/ktm`.
+ * Where everything lives: `KTM_HOME`, then `$XDG_DATA_HOME/ktm`, then
+ * `~/.local/share/ktm`. A command that takes a `--home` flag falls back to
+ * this (`Flag.withFallbackConfig`), so the flag always wins.
  */
 export const ktmHome: Config.Config<string> = Config.string("KTM_HOME").pipe(
   Config.orElse(() =>
@@ -17,22 +18,34 @@ export const ktmHome: Config.Config<string> = Config.string("KTM_HOME").pipe(
   Config.orElse(() => Config.succeed(join(homedir(), ".local", "share", "ktm"))),
 );
 
-/** `name@version` → the identity holding that version's artifact. */
+/** `name@version` → the identity holding that version's artifact. Several
+ * versions may point at one identity when tags share a commit. */
 const StoreIndex = Schema.Record(Schema.String, ArtifactIdentity);
 type StoreIndex = Schema.Schema.Type<typeof StoreIndex>;
+
+const versionKey = (name: string, version: string): string => `${name}@${version}`;
 
 /**
  * The layout under `home`. Every path segment that comes from outside —
  * a repository key segment, a package name — is escaped so `@scope/name`
  * or an odd host cannot open a directory the layout did not plan for.
  */
-export const layout = (home: string) => {
+export interface StoreLayout {
+  readonly home: string;
+  readonly index: string;
+  /** Bare clone of the repository, fetched once and updated on demand. */
+  clone(repository: string): string;
+  artifact(identity: ArtifactIdentity): string;
+  /** An adapter's saved interactive defaults, one file per adapter. */
+  harnessPreferences(adapterId: string): string;
+}
+
+export const layout = (home: string): StoreLayout => {
   const keyPath = (repository: string): string =>
     join(...repositoryKey(repository).split("/").map(encodeURIComponent));
   return {
     home,
     index: join(home, "index.json"),
-    /** Bare clone of the repository, fetched once and updated on demand. */
     clone: (repository: string): string => join(home, "repos", `${keyPath(repository)}.git`),
     artifact: (identity: ArtifactIdentity): string =>
       join(
@@ -42,7 +55,6 @@ export const layout = (home: string) => {
         identity.commit,
         `${encodeURIComponent(identity.name)}.json`,
       ),
-    /** An adapter's saved interactive defaults, one file per adapter. */
     harnessPreferences: (adapterId: string): string => join(home, "harness", `${adapterId}.json`),
   };
 };
@@ -59,7 +71,7 @@ const isMissing = (cause: unknown): boolean =>
 export class Store extends Context.Service<
   Store,
   {
-    readonly layout: ReturnType<typeof layout>;
+    readonly layout: StoreLayout;
     /** Save an artifact under its identity, replacing any earlier one. */
     write(artifact: AnalysisArtifact): Effect.Effect<void, StoreIoError | StoreIndexError>;
     read(
@@ -91,20 +103,27 @@ export class Store extends Context.Service<
         });
       });
 
-      const readIndex = Effect.fn("Store.readIndex")(function* (): Effect.fn.Return<
-        StoreIndex,
-        StoreIoError | StoreIndexError
-      > {
-        const text = yield* Effect.tryPromise({
-          try: () => readFile(paths.index, "utf8"),
+      /** A file's text, or null when it does not exist; any other failure is an error. */
+      const readText = Effect.fn("Store.readText")(function* (
+        path: string,
+      ): Effect.fn.Return<string | null, StoreIoError> {
+        return yield* Effect.tryPromise({
+          try: () => readFile(path, "utf8"),
           catch: (cause) => cause,
         }).pipe(
           Effect.catch((cause) =>
             isMissing(cause)
               ? Effect.succeed(null)
-              : Effect.fail(new StoreIoError({ message: `could not read ${paths.index}`, cause })),
+              : Effect.fail(new StoreIoError({ message: `could not read ${path}`, cause })),
           ),
         );
+      });
+
+      const readIndex = Effect.fn("Store.readIndex")(function* (): Effect.fn.Return<
+        StoreIndex,
+        StoreIoError | StoreIndexError
+      > {
+        const text = yield* readText(paths.index);
         if (text === null) {
           return {};
         }
@@ -141,20 +160,12 @@ export class Store extends Context.Service<
         identity: ArtifactIdentity,
       ): Effect.fn.Return<AnalysisArtifact, StoreIoError | ArtifactNotFoundError> {
         const path = paths.artifact(identity);
-        const text = yield* Effect.tryPromise({
-          try: () => readFile(path, "utf8"),
-          catch: (cause) => cause,
-        }).pipe(
-          Effect.catch((cause) =>
-            Effect.fail(
-              isMissing(cause)
-                ? new ArtifactNotFoundError({
-                    message: `no artifact for ${identity.name} at ${identity.commit} of ${identity.repository}`,
-                  })
-                : new StoreIoError({ message: `could not read ${path}`, cause }),
-            ),
-          ),
-        );
+        const text = yield* readText(path);
+        if (text === null) {
+          return yield* new ArtifactNotFoundError({
+            message: `no artifact for ${identity.name} at ${identity.commit} of ${identity.repository}`,
+          });
+        }
         return yield* Schema.decodeUnknownEffect(Schema.fromJsonString(AnalysisArtifact))(
           text,
         ).pipe(
@@ -176,7 +187,7 @@ export class Store extends Context.Service<
         StoreIoError | StoreIndexError | ArtifactNotFoundError
       > {
         const index = yield* readIndex();
-        const identity = index[`${name}@${version}`];
+        const identity = index[versionKey(name, version)];
         if (identity === undefined) {
           return yield* new ArtifactNotFoundError({
             message: `${name}@${version} is not indexed`,

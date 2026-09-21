@@ -1,12 +1,12 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AnalysisArtifact, ArtifactIdentity } from "@know-the-map/hermeneut";
-import { DateTime, Effect } from "effect";
+import { ConfigProvider, DateTime, Effect } from "effect";
 import { ArtifactNotFoundError, StoreIndexError } from "./errors.ts";
 import { repositoryKey } from "./repository-key.ts";
-import { Store } from "./store.ts";
+import { ktmHome, Store } from "./store.ts";
 
 test.each([
   "https://github.com/Effect-TS/effect.git",
@@ -15,6 +15,14 @@ test.each([
   "ssh://git@github.com/Effect-TS/effect",
 ])("repositoryKey normalizes %s to github.com/effect-ts/effect", (repository) => {
   expect(repositoryKey(repository)).toBe("github.com/effect-ts/effect");
+});
+
+test.each([
+  [{ KTM_HOME: "/explicit", XDG_DATA_HOME: "/xdg" }, "/explicit"],
+  [{ XDG_DATA_HOME: "/xdg" }, "/xdg/ktm"],
+  [{}, join(homedir(), ".local", "share", "ktm")],
+])("ktmHome resolves %o to %s", (env, expected) => {
+  expect(Effect.runSync(ktmHome.parse(ConfigProvider.fromUnknown(env)))).toBe(expected);
 });
 
 const IDENTITY: ArtifactIdentity = {
