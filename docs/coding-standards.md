@@ -78,15 +78,17 @@ info/warn lines.
 
 Prompts are product copy. No brand or system names inside them; the model
 has no use for them. Set an explicit verbosity level instead of leaving it
-to the model. State ignore-lists concretely (`.ktm/`, `dist/`, generated
-output).
+to the model. State ignore-lists concretely (`node_modules/`, `dist/`,
+generated output).
 
 ## Monorepo
 
 `catalog:` shared versions, `workspace:*` internal, `@know-the-map/*` scope;
-`packages/*` libs, `apps/*` executables. Per-adapter state (preferences,
-caches) lives under `.ktm/<kind>/<adapter-id>.json` — never a flat shared
-file two adapters could collide on.
+`packages/*` libs, `apps/*` executables. All state lives under `KTM_HOME`
+(`@know-the-map/store` owns the layout); nothing is written into the
+analyzed project. Per-adapter state (preferences, caches) lives under
+`$KTM_HOME/<kind>/<adapter-id>.json` — never a flat shared file two
+adapters could collide on.
 
 ## Permissions
 

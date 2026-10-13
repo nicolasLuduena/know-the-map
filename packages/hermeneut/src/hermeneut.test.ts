@@ -9,7 +9,7 @@ import {
   NoSubmissionError,
 } from "@know-the-map/harness";
 import { Duration, Effect, Layer, Schema } from "effect";
-import type { AnalysisBounds, HarnessSelection } from "./hermeneut.ts";
+import type { AnalysisBounds, AnalysisTarget, HarnessSelection } from "./hermeneut.ts";
 import { defaultAnalysisBounds, Hermeneut, HermeneutLive } from "./hermeneut.ts";
 import { AnalysisArtifact } from "./schemas.ts";
 
@@ -22,15 +22,30 @@ const TEST_HARNESS_SELECTION: HarnessSelection = {
 /**
  * The mock git service and the mock harness share this fixture: scripted
  * model payloads only reference what the mock git knows, so the
- * anti-hallucination validation has a deterministic oracle.
+ * anti-hallucination validation has a deterministic oracle. `native/lib.rs`
+ * sits outside the analyzed scope on purpose: it is what an opaque-source
+ * hint may legitimately point at.
  */
 const FIXTURE = {
   headCommit: "0123456789abcdef0123456789abcdef01234567",
   files: [
     { path: "src/a.ts", hash: "aaaa", lineCount: 10 },
     { path: "src/b.ts", hash: "bbbb", lineCount: 5 },
+    { path: "native/lib.rs", hash: "cccc", lineCount: 30 },
   ],
 } as const;
+
+const TARGET: AnalysisTarget = {
+  root: "/repo",
+  identity: {
+    repository: "https://github.com/acme/widgets.git",
+    commit: FIXTURE.headCommit,
+    name: "@acme/widgets",
+  },
+  packageVersion: "1.2.3",
+  scope: "src",
+  workspaceDependencies: [{ name: "@acme/core", indexed: false }],
+};
 
 const MockGit: Layer.Layer<Git> = Layer.succeed(
   Git,
@@ -160,7 +175,7 @@ const keyedHarness = (
 const analyzeWith = async (harness: Layer.Layer<Harness>, bounds: AnalysisBounds) => {
   const program = Effect.gen(function* () {
     const hermeneut = yield* Hermeneut;
-    return yield* hermeneut.analyze(".", TEST_HARNESS_SELECTION, bounds);
+    return yield* hermeneut.analyze(TARGET, TEST_HARNESS_SELECTION, bounds);
   }).pipe(Effect.provide(HermeneutLive.pipe(Layer.provide(MockGit), Layer.provide(harness))));
   return Effect.runPromise(Effect.result(program)).then((result) =>
     result._tag === "Success"
@@ -245,8 +260,11 @@ test("happy path: division then module analyses produce the artifact", async () 
   expect(outcome._tag).toBe("Right");
   if (outcome._tag !== "Right") return;
   const artifact: AnalysisArtifact = outcome.right;
-  expect(artifact.headCommit).toBe(FIXTURE.headCommit);
-  expect(artifact.version).toBe(1);
+  expect(artifact.version).toBe(2);
+  expect(artifact.identity).toEqual(TARGET.identity);
+  expect(artifact.packageVersion).toBe("1.2.3");
+  expect(artifact.scope).toBe("src");
+  expect(artifact.workspaceDependencies).toEqual([{ name: "@acme/core", indexed: false }]);
   const root = artifact.scopes[0];
   if (root?.result.kind !== "division") throw new Error("root scope should be a division");
   expect(root.result.components.map((component) => component.name)).toEqual(["alpha", "beta"]);
@@ -264,6 +282,9 @@ test("happy path: division then module analyses produce the artifact", async () 
   ]);
   expect(sent).toHaveLength(3);
   expect(sent[0]?.prompt).toContain("src/a.ts");
+  // Only the scope's own files are submitted; the rest of the checkout is
+  // not the model's to read.
+  expect(sent[0]?.prompt).not.toContain("native/lib.rs");
   // A child scope learns why it exists; the root has no such context.
   expect(sent[0]?.prompt).not.toContain('component "');
   expect(sent[1]?.prompt).toContain('component "alpha"');
@@ -348,6 +369,49 @@ test(`kind "other" without customKind triggers a clarification`, async () => {
 
   expect(outcome._tag).toBe("Right");
   expect(sent[2]?.prompt).toContain("customKind");
+});
+
+const opaque = (sourceHint?: string) => ({
+  kind: "gap",
+  reason: "opaque_source",
+  message: "the exported functions are thin wrappers over a native library",
+  ...(sourceHint === undefined ? {} : { sourceHint }),
+});
+
+test("an opaque_source answer is recorded as a gap, with a hint that points outside the scope", async () => {
+  const { outcome, sent } = await runAnalysis([
+    division(),
+    opaque("native/lib.rs"),
+    module(7, "src/b.ts"),
+  ]);
+
+  expect(outcome._tag).toBe("Right");
+  if (outcome._tag !== "Right") return;
+  expect(sent).toHaveLength(3);
+  expect(outcome.right.scopes[1]?.result).toEqual({
+    kind: "gap",
+    reason: "opaque_source",
+    message: "the exported functions are thin wrappers over a native library",
+    sourceHint: "native/lib.rs",
+  });
+  // The hint is a pointer, not an analyzed file: it stays out of the inventory.
+  expect(outcome.right.files.map((file) => file.path)).toEqual(["src/a.ts", "src/b.ts"]);
+  const encoded = Schema.encodeSync(AnalysisArtifact)(outcome.right);
+  expect(Schema.decodeUnknownSync(AnalysisArtifact)(encoded).scopes).toHaveLength(3);
+});
+
+test("an opaque_source hint that exists nowhere in the checkout triggers a clarification", async () => {
+  const { outcome, sent } = await runAnalysis([
+    division(),
+    opaque("native/ghost.rs"),
+    opaque(),
+    module(7, "src/b.ts"),
+  ]);
+
+  expect(outcome._tag).toBe("Right");
+  expect(sent).toHaveLength(4);
+  expect(sent[2]?.prompt).toContain("Clarification required");
+  expect(sent[2]?.prompt).toContain("native/ghost.rs");
 });
 
 test("a payload that fails the answer contract triggers a clarification, then the run recovers", async () => {
@@ -589,8 +653,11 @@ const fixture = () => {
     } as Record<string, unknown>,
   };
   const artifact = {
-    version: 1,
-    headCommit: FIXTURE.headCommit,
+    version: 2 as const,
+    identity: TARGET.identity,
+    packageVersion: "1.2.3",
+    scope: "src",
+    workspaceDependencies: [{ name: "@acme/core", indexed: true }],
     generatedAt: "2026-09-05T12:00:00.000Z",
     files: [{ path: "src/a.ts", hash: "aaaa", lineCount: 10 }],
     scopes: [root, leaf] as Array<unknown>,
@@ -601,6 +668,15 @@ type Fixture = ReturnType<typeof fixture>;
 
 test("the artifact schema accepts a well-formed tree", () => {
   expect(Schema.decodeUnknownSync(AnalysisArtifact)(fixture().artifact).scopes).toHaveLength(2);
+});
+
+test("an artifact round-trips through the schema with its identity, scope and workspace dependencies", () => {
+  const raw = fixture().artifact;
+  const decoded = Schema.decodeUnknownSync(AnalysisArtifact)(raw);
+  expect(decoded.identity).toEqual(TARGET.identity);
+  expect(decoded.scope).toBe("src");
+  expect(decoded.workspaceDependencies).toEqual([{ name: "@acme/core", indexed: true }]);
+  expect(Schema.encodeSync(AnalysisArtifact)(decoded) as unknown).toEqual(raw);
 });
 
 test.each([
@@ -646,6 +722,32 @@ test.each([
     ({ leaf }: Fixture) => {
       leaf.result = { kind: "gap", reason: "call_budget", message: "budget exhausted" };
       leaf.inputPaths = [];
+    },
+  ],
+  [
+    "a runner gap that carries a source hint",
+    "sourceHint",
+    ({ leaf }: Fixture) => {
+      leaf.result = {
+        kind: "gap",
+        reason: "call_budget",
+        message: "budget exhausted",
+        sourceHint: "native/lib.rs",
+      };
+    },
+  ],
+  [
+    "a scope outside the repository",
+    "not allowed",
+    ({ artifact }: Fixture) => {
+      artifact.scope = "../elsewhere";
+    },
+  ],
+  [
+    "an identity whose commit is not a full object id",
+    '["identity"]["commit"]',
+    ({ artifact }: Fixture) => {
+      artifact.identity = { ...artifact.identity, commit: "abc123" };
     },
   ],
   [

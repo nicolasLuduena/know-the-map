@@ -352,7 +352,7 @@ export const OpencodeHarnessLive: Layer.Layer<Harness, HostFailureError> = Layer
 
       const created = yield* pluginSession
         .create({
-          title: "ktm analyze",
+          title: "ktm index",
           model,
           // The session's working directory: file tools of the analyze
           // agent are scoped to the repository under analysis, not to

@@ -65,8 +65,15 @@ const gapScope = (
 });
 
 const buildArtifact = (scopes: ReadonlyArray<unknown>, files: ReadonlyArray<string>) => ({
-  version: 1 as const,
-  headCommit: "0".repeat(40),
+  version: 2 as const,
+  identity: {
+    repository: "https://example.test/fixture.git",
+    commit: "0".repeat(40),
+    name: "fixture",
+  },
+  packageVersion: "0.0.0",
+  scope: ".",
+  workspaceDependencies: [],
   generatedAt: "2026-09-06T00:00:00.000Z",
   files: files.map((path) => ({ path, hash: "hash", lineCount: 1 })),
   scopes,
@@ -323,8 +330,15 @@ test("coverage counts explored files and gaps across a tree with gaps", () => {
 
 test("coverage on a single-module root artifact treats the root as fully explored", () => {
   const artifact = decode({
-    version: 1 as const,
-    headCommit: "0".repeat(40),
+    version: 2 as const,
+    identity: {
+      repository: "https://example.test/fixture.git",
+      commit: "0".repeat(40),
+      name: "fixture",
+    },
+    packageVersion: "0.0.0",
+    scope: ".",
+    workspaceDependencies: [],
     generatedAt: "2026-09-06T00:00:00.000Z",
     files: [
       { path: "src/a.ts", hash: "hash", lineCount: 1 },

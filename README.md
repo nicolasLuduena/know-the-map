@@ -14,26 +14,25 @@ behind it.
 
 ## Browse a saved analysis
 
-Requires Bun and Git. Install dependencies with `bun install`, then create an
-analysis and open it:
+Requires Bun and Git. Install dependencies with `bun install`, then open a
+saved artifact:
 
 ```sh
-bun run ktm analyze .
-bun run ktm view .
+bun run ktm view . --artifact packages/viewer/test-fixtures/analysis.json
 ```
 
-`analyze` asks for a provider, model, and division depth. To run it without
-prompts (scripts, CI), pass them as flags; `--model` takes `provider/model`
-as the picker lists them, and every flag also reads a `KTM_*` variable:
+Producing an artifact is `ktm index` (not here yet); the `analyze` command
+that wrote into the project's own `.ktm/` directory is gone. Artifacts are
+identified by package — repository, commit, name — and live under
+`KTM_HOME` (`$XDG_DATA_HOME/ktm`, falling back to `~/.local/share/ktm`):
 
-```sh
-bun run ktm analyze . --model opencode-go/deepseek-v4.1-flash --variant low --max-depth 5
 ```
-
-Each scope is analyzed in a model session of its own, and components are
-explored concurrently — at most `--max-concurrency` (default 4,
-`KTM_MAX_CONCURRENCY`) open sessions at a time across the whole run.
-`--max-harness-calls` remains an exact budget across all of them.
+$KTM_HOME/
+  repos/<host>/<owner>/<repo>.git               bare clones
+  store/<host>/<owner>/<repo>/<commit>/<name>.json
+  index.json                                    name@version -> identity
+  harness/opencode.json                         the picker's saved defaults
+```
 
 `view` prints a `http://127.0.0.1:…/` address. The server binds an available
 port unless `--port 4321` names one, and stops on Ctrl+C.
@@ -41,13 +40,9 @@ port unless `--port 4321` names one, and stops on Ctrl+C.
 ```sh
 # An explicit repository and saved artifact
 bun run ktm view /path/to/repository --artifact /path/to/analysis.json
-
-# See the interface without making any model calls
-bun run ktm view . --artifact packages/viewer/test-fixtures/analysis.json
 ```
 
-The artifact path defaults to `.ktm/analysis.json`, matching where `analyze`
-writes. Viewing works with a dirty worktree and never starts a model harness.
+Viewing works with a dirty worktree and never starts a model harness.
 
 Navigate the component outline, search names and file paths, and follow the
 spine back up to the repository. Interpretations belong to the scope that
@@ -59,8 +54,9 @@ The interface is served on loopback only: requests must carry a loopback
 `Host`, and any `Origin` must be the server itself. Nothing is fetched from
 outside the process.
 
-**Artifacts from before `version: 1` must be regenerated.** The viewer needs
-the recorded scope hierarchy and will not guess it from file paths.
+**Artifacts from before `version: 2` must be regenerated.** The viewer needs
+the package identity and the recorded scope hierarchy, and will not guess
+either.
 
 This slice browses a saved analysis. Reading the cited source, live analysis,
 and recording your own interpretations are not here yet.

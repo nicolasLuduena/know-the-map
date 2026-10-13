@@ -1,160 +1,12 @@
 #!/usr/bin/env bun
-import { mkdirSync } from "node:fs";
-import { join } from "node:path";
 import { BunRuntime, BunServices } from "@effect/platform-bun";
 import { Git, GitLive } from "@know-the-map/git";
-import { guard, Harness, HostFailureError } from "@know-the-map/harness";
-import { OpencodeHarnessLive } from "@know-the-map/harness-opencode";
-import {
-  AnalysisArtifact,
-  AnalysisBounds,
-  defaultAnalysisBounds,
-  Hermeneut,
-  HermeneutLive,
-} from "@know-the-map/hermeneut";
+import { HostFailureError } from "@know-the-map/harness";
 import { startViewer } from "@know-the-map/viewer";
-import { Config, Console, Effect, Layer, Option, Schema } from "effect";
-import { Argument, Command, Flag, Prompt } from "effect/unstable/cli";
-import { readHarnessPreferences, writeHarnessPreferences } from "./harness-preferences.ts";
-import { promptHarnessSelection, resolveHarnessSelection } from "./harness-prompt.ts";
+import { Console, Effect, Layer } from "effect";
+import { Argument, Command, Flag } from "effect/unstable/cli";
 
 const VERSION = "0.0.0";
-const OUTPUT_PATH = join(".ktm", "analysis.json");
-
-const analyze = Command.make(
-  "analyze",
-  {
-    path: Argument.string("path").pipe(
-      Argument.withDescription("Directory inside the repository to analyze"),
-      Argument.withDefault("."),
-    ),
-    maxHarnessCalls: Flag.integer("max-harness-calls").pipe(
-      Flag.withDescription("Maximum model calls before the run stops"),
-      Flag.withFallbackConfig(Config.int("KTM_MAX_HARNESS_CALLS")),
-      Flag.withDefault(defaultAnalysisBounds.maxHarnessCalls),
-    ),
-    maxClarifications: Flag.integer("max-clarifications").pipe(
-      Flag.withDescription("Maximum clarification rounds per model exchange"),
-      Flag.withFallbackConfig(Config.int("KTM_MAX_CLARIFICATIONS")),
-      Flag.withDefault(defaultAnalysisBounds.maxClarifications),
-    ),
-    maxConcurrency: Flag.integer("max-concurrency").pipe(
-      Flag.withDescription("Maximum sibling components explored at once"),
-      Flag.withFallbackConfig(Config.int("KTM_MAX_CONCURRENCY")),
-      Flag.withDefault(defaultAnalysisBounds.maxConcurrency),
-    ),
-    model: Flag.string("model").pipe(
-      Flag.withDescription(
-        "Skip the interactive picker: provider/model as the picker lists them (e.g. opencode-go/deepseek-v4.1-flash)",
-      ),
-      Flag.withFallbackConfig(Config.string("KTM_MODEL")),
-      Flag.optional,
-    ),
-    variant: Flag.string("variant").pipe(
-      Flag.withDescription("Reasoning / variant for --model; the provider's default when omitted"),
-      Flag.withFallbackConfig(Config.string("KTM_VARIANT")),
-      Flag.optional,
-    ),
-    maxDepth: Flag.integer("max-depth").pipe(
-      Flag.withDescription("Maximum component-division depth; prompted when omitted"),
-      Flag.withFallbackConfig(Config.int("KTM_MAX_DEPTH")),
-      Flag.optional,
-    ),
-  },
-  ({
-    path,
-    maxHarnessCalls,
-    maxClarifications,
-    maxConcurrency,
-    model,
-    variant,
-    maxDepth: maxDepthFlag,
-  }) =>
-    Effect.gen(function* () {
-      const harness = yield* Harness;
-      const hermeneut = yield* Hermeneut;
-
-      const options = yield* harness.listModels();
-      yield* guard(
-        options.length > 0,
-        () =>
-          new HostFailureError({
-            message: "no usable provider found — check ~/.local/share/opencode/auth.json",
-          }),
-      );
-      const defaults = yield* readHarnessPreferences;
-      // A scripted run (--model) never touches the saved preferences: those
-      // are the interactive picker's defaults, not a record of every run.
-      const harnessSelection = Option.isSome(model)
-        ? yield* resolveHarnessSelection(options, model.value, variant, defaults)
-        : yield* promptHarnessSelection(options, defaults).pipe(
-            Effect.tap((selection) => writeHarnessPreferences(selection.preferences)),
-            Effect.map((selection) => selection.harness),
-            Effect.mapError(
-              (cause) => new HostFailureError({ message: "prompt cancelled", cause }),
-            ),
-          );
-
-      // Interactive like the harness selection above, for the same reason:
-      // a division-depth cap the caller can't see or tune per run is a
-      // silent tradeoff. Not persisted to .ktm/harness/opencode.json — that
-      // file is harness-selection state, not an analysis bound.
-      const maxDepth = Option.isSome(maxDepthFlag)
-        ? maxDepthFlag.value
-        : yield* Prompt.run(
-            Prompt.integer({
-              message: "Max component-division depth",
-              default: defaultAnalysisBounds.maxDepth,
-              min: 1,
-            }),
-          ).pipe(
-            Effect.mapError(
-              (cause) => new HostFailureError({ message: "prompt cancelled", cause }),
-            ),
-          );
-
-      // Flags arrive as bare integers; the schema is what rejects a zero
-      // or negative bound before it reaches the analysis loop.
-      const bounds = yield* Schema.decodeUnknownEffect(AnalysisBounds)({
-        maxHarnessCalls,
-        maxDepth,
-        maxClarifications,
-        maxConcurrency,
-      }).pipe(Effect.mapError((cause) => new HostFailureError({ message: cause.message, cause })));
-      const artifact = yield* hermeneut.analyze(path, harnessSelection, bounds);
-      yield* Effect.sync(() => mkdirSync(".ktm", { recursive: true }));
-      // Encoded through the schema rather than stringified directly, so the
-      // file on disk is exactly what `AnalysisArtifact` decodes back.
-      const encoded = yield* Schema.encodeEffect(AnalysisArtifact)(artifact).pipe(Effect.orDie);
-      yield* Effect.tryPromise(() =>
-        Bun.write(OUTPUT_PATH, `${JSON.stringify(encoded, null, 2)}\n`),
-      ).pipe(Effect.orDie);
-      const divisions = artifact.scopes.flatMap((scope) =>
-        scope.result.kind === "division" ? [scope.result] : [],
-      );
-      const gaps = artifact.scopes.filter((scope) => scope.result.kind === "gap").length;
-      yield* Console.log(`scopes: ${artifact.scopes.length}`);
-      yield* Console.log(
-        `components: ${divisions.reduce((total, it) => total + it.components.length, 0)}`,
-      );
-      yield* Console.log(
-        `relationships: ${divisions.reduce((total, it) => total + it.relationships.length, 0)}`,
-      );
-      yield* Console.log(
-        `interpretations: ${artifact.scopes.reduce(
-          (total, it) => total + (it.result.kind === "gap" ? 0 : it.result.interpretations.length),
-          0,
-        )}`,
-      );
-      yield* Console.log(`coverage gaps: ${gaps}`);
-      yield* Console.log(`wrote ${OUTPUT_PATH} (head ${artifact.headCommit})`);
-    }).pipe(
-      // Only `analyze` talks to a model, so only `analyze` starts a harness.
-      Effect.provide(
-        Layer.mergeAll(HermeneutLive.pipe(Layer.provide(OpencodeHarnessLive)), OpencodeHarnessLive),
-      ),
-    ),
-).pipe(Command.withDescription("Analyze a repository, writing .ktm/analysis.json"));
 
 const view = Command.make(
   "view",
@@ -163,10 +15,7 @@ const view = Command.make(
       Argument.withDescription("Directory inside the analyzed repository"),
       Argument.withDefault("."),
     ),
-    artifact: Flag.string("artifact").pipe(
-      Flag.withDescription("Saved analysis to open"),
-      Flag.withDefault(OUTPUT_PATH),
-    ),
+    artifact: Flag.string("artifact").pipe(Flag.withDescription("Saved analysis to open")),
     port: Flag.integer("port").pipe(
       Flag.withDescription("Loopback port; 0 selects an available one"),
       Flag.withDefault(0),
@@ -187,13 +36,11 @@ const view = Command.make(
 
 const cli = Command.make("ktm").pipe(
   Command.withDescription("Know the Map"),
-  Command.withSubcommands([analyze, view]),
+  Command.withSubcommands([view]),
 );
 
 cli.pipe(
   Command.run({ version: VERSION }),
-  // Git is built once here for every subcommand; the harness is provided
-  // only by the command that needs it.
   Effect.provide(GitLive.pipe(Layer.provideMerge(BunServices.layer))),
   BunRuntime.runMain,
 );

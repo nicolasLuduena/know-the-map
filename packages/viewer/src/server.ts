@@ -144,7 +144,7 @@ export const startViewer = Effect.fn("startViewer")(function* (options: ViewerOp
   });
   if (!exists) {
     return yield* new ViewerStartupError({
-      message: `no analysis found at ${options.artifactPath}; run "ktm analyze" first`,
+      message: `no analysis found at ${options.artifactPath}; run "ktm index" first`,
     });
   }
   const text = yield* Effect.tryPromise({
@@ -158,7 +158,7 @@ export const startViewer = Effect.fn("startViewer")(function* (options: ViewerOp
     Effect.mapError(
       (cause) =>
         new ViewerStartupError({
-          message: `${options.artifactPath} is not a version 1 analysis; rerun "ktm analyze" to regenerate it. ${cause.message}`,
+          message: `${options.artifactPath} is not a version 2 analysis; rerun "ktm index" to regenerate it. ${cause.message}`,
           cause,
         }),
     ),
@@ -196,7 +196,7 @@ export const startViewer = Effect.fn("startViewer")(function* (options: ViewerOp
       ),
     );
     const read = yield* options.git
-      .readSnapshotFile(repo.root, artifact.headCommit, path, file.hash, MAX_SOURCE_BYTES)
+      .readSnapshotFile(repo.root, artifact.identity.commit, path, file.hash, MAX_SOURCE_BYTES)
       .pipe(
         Effect.catchTag(
           "SnapshotFileError",
@@ -207,7 +207,7 @@ export const startViewer = Effect.fn("startViewer")(function* (options: ViewerOp
                   ? `"${path}" is a binary file and cannot be shown as source.`
                   : cause.reason === "too_large"
                     ? `"${path}" is too large to display (over ${MAX_SOURCE_BYTES} bytes).`
-                    : `"${path}" no longer matches what was analyzed; rerun "ktm analyze" to refresh it.`,
+                    : `"${path}" no longer matches what was analyzed; rerun "ktm index" to refresh it.`,
               reason:
                 cause.reason === "binary" || cause.reason === "too_large" ? cause.reason : "stale",
             }),

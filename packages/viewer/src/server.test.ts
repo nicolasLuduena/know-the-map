@@ -67,9 +67,12 @@ const clientLayer = (url: string, origin: string) =>
     Layer.provide(RpcSerialization.layerJson),
   );
 
-const validArtifact = (headCommit: string) => ({
-  version: 1,
-  headCommit,
+const validArtifact = (commit: string) => ({
+  version: 2,
+  identity: { repository: "https://example.test/fixture.git", commit, name: "fixture" },
+  packageVersion: "0.0.0",
+  scope: ".",
+  workspaceDependencies: [],
   generatedAt: "2026-09-06T00:00:00.000Z",
   files: [
     { path: "a.ts", hash: aHash, lineCount: 1 },
@@ -256,7 +259,7 @@ test("a missing artifact fails to start with an actionable message", async () =>
   expect(outcome._tag).toBe("Failure");
   if (outcome._tag !== "Failure") return;
   expect(outcome.failure).toBeInstanceOf(ViewerStartupError);
-  expect(outcome.failure.message).toContain("ktm analyze");
+  expect(outcome.failure.message).toContain("ktm index");
 });
 
 test("an artifact from the old format fails to start, naming the version", async () => {
@@ -283,7 +286,7 @@ test("an artifact from the old format fails to start, naming the version", async
 
   expect(outcome._tag).toBe("Failure");
   if (outcome._tag !== "Failure") return;
-  expect(outcome.failure.message).toContain("version 1");
+  expect(outcome.failure.message).toContain("version 2");
 });
 
 test("the served payload is fixed at startup, not re-read per request", async () => {

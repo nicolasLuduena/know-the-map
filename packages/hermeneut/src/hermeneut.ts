@@ -1,5 +1,6 @@
 import { Git, type GitError } from "@know-the-map/git";
 import {
+  guard,
   Harness,
   type HarnessError,
   type HarnessSession,
@@ -7,7 +8,7 @@ import {
   InvalidResultError,
 } from "@know-the-map/harness";
 import { Context, DateTime, Effect, Layer, Ref, Schema, Semaphore } from "effect";
-import { AnalysisBoundExceededError } from "./errors.ts";
+import { AnalysisBoundExceededError, EmptyScopeError } from "./errors.ts";
 import {
   clarificationPrompt,
   contractClarificationPrompt,
@@ -16,13 +17,14 @@ import {
 } from "./prompts.ts";
 import type {
   AnalysisArtifact,
+  AnalysisArtifactShape,
   AnalysisScope,
   Component,
   FileStatus,
   ScopeResult,
 } from "./schemas.ts";
 import { LlmResponse, PositiveInt } from "./schemas.ts";
-import { validateResponse } from "./validation.ts";
+import { describeIssue, validateResponse } from "./validation.ts";
 
 /** Per-run bounds on the analysis loop: how much model budget and division
  * depth one `analyze()` call may spend before it stops itself. */
@@ -50,7 +52,21 @@ export type HarnessSelection = Pick<
   "model" | "turnTimeout" | "maxGenerationTokens"
 >;
 
-export type AnalyzeError = GitError | HarnessError;
+/**
+ * The package to analyze, as the caller recognized it: the identity the
+ * artifact will carry, the data recorded alongside it, and the checkout
+ * the files are read from. Nothing here is discovered from git — a
+ * checkout at the wrong commit would silently mislabel the artifact.
+ */
+export type AnalysisTarget = Pick<
+  AnalysisArtifactShape,
+  "identity" | "packageVersion" | "scope" | "workspaceDependencies"
+> & {
+  /** Working tree of `identity.repository` checked out at `identity.commit`. */
+  readonly root: string;
+};
+
+export type AnalyzeError = GitError | HarnessError | EmptyScopeError;
 
 /**
  * `exchange`'s own error channel, wider than `AnalyzeError`: reaching the
@@ -103,12 +119,12 @@ export class Hermeneut extends Context.Service<
   Hermeneut,
   {
     /**
-     * Analyze the repository containing `directory`: recursive component
-     * division plus line-anchored interpretations, ending in a
+     * Analyze the files under `target.scope` of the checkout: recursive
+     * component division plus line-anchored interpretations, ending in a
      * persisted-ready artifact.
      */
     analyze(
-      directory: string,
+      target: AnalysisTarget,
       harnessSelection: HarnessSelection,
       bounds?: AnalysisBounds,
     ): Effect.Effect<AnalysisArtifact, AnalyzeError>;
@@ -122,13 +138,26 @@ export const HermeneutLive: Layer.Layer<Hermeneut, never, Git | Harness> = Layer
     const harness = yield* Harness;
 
     const analyze = Effect.fn("Hermeneut.analyze")(function* (
-      directory: string,
+      target: AnalysisTarget,
       harnessSelection: HarnessSelection,
       bounds: AnalysisBounds = defaultAnalysisBounds,
     ): Effect.fn.Return<AnalysisArtifact, AnalyzeError> {
-      const repo = yield* git.resolve(directory);
-      const entries = yield* git.inventory(repo.root);
-      const inventory = new Map(entries.map((entry) => [entry.path, entry]));
+      const entries = yield* git.inventory(target.root);
+      // The whole checkout answers "does this path exist" for hints that
+      // point outside the scope; only the scope's own files are analyzed.
+      const checkout = new Set(entries.map((entry) => entry.path));
+      const inventory = new Map(
+        entries
+          .filter((entry) => target.scope === "." || entry.path.startsWith(`${target.scope}/`))
+          .map((entry) => [entry.path, entry]),
+      );
+      yield* guard(
+        inventory.size > 0,
+        () =>
+          new EmptyScopeError({
+            message: `"${target.scope}" holds no files in the checkout at ${target.root}`,
+          }),
+      );
       const lineCounts = new Map<string, number>();
       const lineCount = (path: string): Effect.Effect<number, GitError> =>
         Effect.gen(function* () {
@@ -136,7 +165,7 @@ export const HermeneutLive: Layer.Layer<Hermeneut, never, Git | Harness> = Layer
           if (cached !== undefined) {
             return cached;
           }
-          const count = yield* git.lineCount(repo.root, path);
+          const count = yield* git.lineCount(target.root, path);
           lineCounts.set(path, count);
           return count;
         });
@@ -210,9 +239,11 @@ export const HermeneutLive: Layer.Layer<Hermeneut, never, Git | Harness> = Layer
           yield* Effect.logInfo(
             response.kind === "division"
               ? `found ${response.components.length} component(s) and ${response.relationships.length} relationship(s) in this scope`
-              : "this scope is one module",
+              : response.kind === "module"
+                ? "this scope is one module"
+                : "this scope's behavior lives outside its files; recording it as a gap",
           );
-          const issues = yield* validateResponse(response, { inventory, lineCount });
+          const issues = yield* validateResponse(response, { inventory, checkout, lineCount });
           if (issues.length === 0) {
             return response;
           }
@@ -222,7 +253,7 @@ export const HermeneutLive: Layer.Layer<Hermeneut, never, Git | Harness> = Layer
           if (clarifications >= bounds.maxClarifications) {
             return yield* new InvalidResultError({
               message: `model failed to produce a valid result after ${clarifications} clarification round(s); unresolved: ${issues
-                .map((issue) => `claim ${issue.id} (${issue.claim}): ${issue.reason}`)
+                .map(describeIssue)
                 .join("; ")}`,
             });
           }
@@ -245,7 +276,7 @@ export const HermeneutLive: Layer.Layer<Hermeneut, never, Git | Harness> = Layer
         yield* claimCall(scopePaths);
         return yield* Effect.acquireUseRelease(
           harness.start({
-            directory: repo.root,
+            directory: target.root,
             systemPrompt: SYSTEM_PROMPT,
             ...harnessSelection,
           }),
@@ -348,8 +379,11 @@ export const HermeneutLive: Layer.Layer<Hermeneut, never, Git | Harness> = Layer
       flattenScopes(root, null, scopes);
       const generatedAt = yield* DateTime.now;
       return {
-        version: 1,
-        headCommit: repo.headCommit,
+        version: 2,
+        identity: target.identity,
+        packageVersion: target.packageVersion,
+        scope: target.scope,
+        workspaceDependencies: target.workspaceDependencies,
         generatedAt,
         files: yield* buildFiles(scopes),
         scopes,
